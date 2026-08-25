@@ -1,0 +1,305 @@
+\documentclass[11pt,a4paper,UTF8]{ctexart}
+\usepackage[margin=22mm,headheight=14pt]{geometry}
+\usepackage{amsmath,amssymb,mathtools,bm,booktabs,longtable,array}
+\usepackage{xcolor,listings}
+\usepackage[most]{tcolorbox}
+\usepackage{fancyhdr,hyperref,enumitem,microtype}
+
+\definecolor{navy}{HTML}{12304A}
+\definecolor{teal}{HTML}{176B87}
+\definecolor{lightblue}{HTML}{EEF8FB}
+\definecolor{codebg}{HTML}{F3F5F7}
+\hypersetup{colorlinks=true,linkcolor=teal,urlcolor=teal}
+\setlength{\parskip}{0.55em}
+\setlength{\parindent}{2em}
+\setlist[itemize]{leftmargin=2em,itemsep=0.25em}
+\setlist[enumerate]{leftmargin=2.2em,itemsep=0.3em}
+\renewcommand{\arraystretch}{1.25}
+\newcolumntype{L}[1]{>{\raggedright\arraybackslash}p{#1}}
+\newcommand{\pkg}[1]{\texttt{#1}}
+\lstset{basicstyle=\ttfamily\small,backgroundcolor=\color{codebg},frame=single,
+rulecolor=\color{teal!40},breaklines=true,columns=fullflexible,
+xleftmargin=0.5em,xrightmargin=0.5em,aboveskip=0.7em,belowskip=0.7em}
+\pagestyle{fancy}
+\fancyhf{}
+\lhead{\small OptoSimLab | 可微分光信号级仿真平台}
+\rhead{\small 使用说明与自检记录}
+\cfoot{\small 第 \thepage\ 页}
+\renewcommand{\headrulewidth}{0.4pt}
+
+\title{\textcolor{navy}{\Huge OptoSimLab}\\[0.6em]
+\textcolor{teal}{\Large 使用说明与公式自检记录}}
+\author{版本 0.7.0 \quad 项目位置：\texttt{F:\textbackslash OptoSimLab}}
+\date{2026-08-25}
+
+\begin{document}
+\maketitle
+\begin{tcolorbox}[colback=lightblue,colframe=teal,title=本次重制说明]
+本手册使用 \LaTeX{} 原生数学环境排版全部公式。中文正文与数学公式分离渲染，不再把希腊字母、上下标和公式符号作为普通文本输出；本文同时是使用说明和当前版本的自检记录。
+\end{tcolorbox}
+\tableofcontents
+\clearpage
+
+\section{平台范围、交付与边界}
+OptoSimLab 是基于 PyTorch 的\textbf{复包络、信号级、可微分}光学仿真平台。它用于搭建光通信链路、可训练光计算模块和小型光神经网络；它不求解波导横向模式、纳米尺度电磁场或 FDTD 场分布。
+
+全部器件按“一器件一 \pkg{torch.nn.Module}”封装。需要优化的物理量注册为 \pkg{nn.Parameter}，可被优化器、\pkg{state\_dict()} 和 \pkg{.to(device)} 管理。
+
+\begin{longtable}{L{27mm}L{83mm}L{44mm}}
+\toprule
+\textbf{类别} & \textbf{已实现内容} & \textbf{验证重点}\\
+\midrule
+\endhead
+核心约定 & \pkg{SimulationGrid}、FFT 频率轴、物理常数 & 频率轴、单位\\
+调制器 & 理想/有限消光比 MZM、低通驱动 MZM & 峰值、零点、梯度\\
+频域器件 & Butterworth 低通、WaveShaper、色散光纤 & 截止点、损耗、相位\\
+光梳 & 严格 FFT bin 对齐的频域光梳 & 谱线位置、总功率\\
+电光梳 & 理想级联相位调制、RF 一阶响应、Wiener 相位噪声 & Bessel 边带、功率\\
+放大器 & 小信号 EDFA、饱和与 ASE EDFA & 带宽、PSD 归一化\\
+功能模块 & 器件链、复值卷积、Overlap-Save FIR & 批量、梯度、卷积\\
+系统指标 & 频谱、眼图、EVM、Gaussian-Q BER & Parseval、一致性\\
+\bottomrule
+\end{longtable}
+
+\begin{tcolorbox}[colback=lightblue,colframe=teal,title=真实器件边界]
+当前是参数化工程模型。实测曲线 CSV 导入、自动拟合以及与指定硬件逐项标定属于下一阶段；没有实测数据时，不能把仿真结果宣称为已与任一真实设备完全一致。
+\end{tcolorbox}
+
+\section{环境、安装和首次验证}
+\subsection{进入已有环境}
+在 PowerShell 中执行。若提示符开头出现 \pkg{(.venv)}，代表虚拟环境已经激活。
+\begin{lstlisting}[language=bash]
+cd F:\OptoSimLab
+.\.venv\Scripts\Activate.ps1
+python -m pytest -q -p no:cacheprovider tests
+python examples\train_mzm_bias.py
+\end{lstlisting}
+当前 Windows CPU 环境的验收结果是：\textbf{64 项通过，1 项跳过}。跳过项是 CPU/CUDA 一致性测试，因为当前 PyTorch 不带 CUDA；这不是测试失败。
+
+\subsection{从零安装}
+\begin{lstlisting}[language=bash]
+cd F:\OptoSimLab
+python -m venv .venv
+.\.venv\Scripts\Activate.ps1
+python -m pip install --upgrade pip
+python -m pip install torch numpy pytest
+python -m pip install -e . --no-deps
+python -m pytest -q -p no:cacheprovider tests
+\end{lstlisting}
+
+\subsection{安装已打包版本}
+\begin{lstlisting}[language=bash]
+cd F:\OptoSimLab
+.\.venv\Scripts\Activate.ps1
+python -m pip install --force-reinstall --no-deps .\dist\optosimlab-0.7.0-py3-none-any.whl
+python -c "from optosimlab import OverlapSaveFIR; print('import OK')"
+\end{lstlisting}
+
+\section{统一信号与数学约定}
+\subsection{复包络、采样和 FFT}
+时域光场采用复包络 $E(t)$，频率 $f$ 是相对中心载波的偏移，不直接对数百 THz 的载波采样。PyTorch DFT 约定为
+\begin{align}
+X[k] &= \sum_{n=0}^{N-1}x[n]\exp\!\left(-\mathrm{j}\frac{2\pi kn}{N}\right),\\
+x[n] &= \frac{1}{N}\sum_{k=0}^{N-1}X[k]\exp\!\left(+\mathrm{j}\frac{2\pi kn}{N}\right),\\
+\Delta f &= \frac{f_{\mathrm{s}}}{N}.
+\end{align}
+器件必须从 \pkg{SimulationGrid} 获得频率轴和 $\Delta f$，而不应各自复制采样率常数。
+
+\subsection{功率、损耗和频谱}
+\begin{align}
+P[n]&=|E[n]|^2, &
+\bar P&=\frac{1}{N}\sum_{n=0}^{N-1}|E[n]|^2,\\
+\eta_P&=10^{-L_{\mathrm{dB}}/10}, &
+\eta_E&=\sqrt{\eta_P}=10^{-L_{\mathrm{dB}}/20}.
+\end{align}
+这里 $L_{\mathrm{dB}}$ 是功率损耗。将 $10^{-L_{\mathrm{dB}}/10}$ 直接乘到场上会使功率损耗加倍，是本项目的重点公式自检项。频谱采用
+\begin{equation}
+P_{\mathrm{bin}}[k]=\frac{|X[k]|^2}{N^2},\qquad
+\sum_kP_{\mathrm{bin}}[k]=\bar P,
+\end{equation}
+所以满足 Parseval 一致性。
+
+\section{器件公式与正确使用方式}
+\subsection{MZM 与电驱动低通}
+理想推挽 MZM 的场传输公式为
+\begin{equation}
+E_{\mathrm{out}}(t)=E_{\mathrm{in}}(t)
+\cos\!\left[\frac{\pi\bigl(V(t)+V_{\mathrm{bias}}\bigr)}{2V_{\pi}}\right].
+\end{equation}
+插损在场上使用 $10^{-L_{\mathrm{dB}}/20}$。有限消光比用正交泄漏项实现，峰谷\textbf{功率比}为
+\begin{equation}
+\frac{P_{\max}}{P_{\min}}=10^{\mathrm{ER}_{\mathrm{dB}}/10}.
+\end{equation}
+电驱动低通为零相位 Butterworth 幅度响应：
+\begin{equation}
+H_{\mathrm{LP}}(f)=\left[1+\left(\frac{|f|}{f_c}\right)^{2n}\right]^{-1/2}.
+\end{equation}
+因此在 $|f|=f_c$ 处有 $|H_{\mathrm{LP}}|^2=1/2$，即 $-3.0103\,\mathrm{dB}$ 功率点。
+
+\subsection{频域光梳与理想电光梳}
+频域光梳每条谱线都必须落在 FFT bin 上：
+\begin{align}
+f_m &= m\Delta f,\\
+E(t)&=\sum_m\sqrt{P_m}\exp\!\left[\mathrm{j}(2\pi f_mt+\phi_m)\right],\\
+\bar P&=\sum_mP_m.
+\end{align}
+若线间隔不是 $\Delta f$ 的整数倍，有限记录会产生谱泄漏，实现会拒绝该输入。
+
+多级相位调制的理想电光梳为
+\begin{equation}
+E_{\mathrm{out}}(t)=E_{\mathrm{in}}(t)
+\exp\!\left[\mathrm{j}\sum_q\beta_q\sin(2\pi f_qt+\phi_q)\right]
+10^{-L_{\mathrm{dB}}/20}.
+\end{equation}
+无插损时指数因子的模恒为 1，所以逐点功率守恒。单音连续波的第 $n$ 条边带满足
+\begin{equation}
+E_n\propto J_n(\beta)\exp(\mathrm{j}n\phi),\qquad f_n=nf_{\mathrm{RF}}.
+\end{equation}
+
+\subsection{实用 RF 电光梳}
+每一级的 RF 一阶响应、等效调制深度和相位为
+\begin{align}
+H_{\mathrm{RF}}(f)&=\frac{1}{1+\mathrm{j}f/f_c},\\
+\beta_{\mathrm{eff}}&=\beta|H_{\mathrm{RF}}|,\qquad
+\phi_{\mathrm{eff}}=\phi+\arg H_{\mathrm{RF}}.
+\end{align}
+可选 Wiener 相位扩散满足
+\begin{equation}
+\operatorname{Var}\!\left[\varphi_{n+1}-\varphi_n\right]=D_{\varphi}\Delta t.
+\end{equation}
+这是可控的相位扩散近似，并非完整的真实激光器相噪模型。
+
+\subsection{光纤与 WaveShaper}
+线性色散光纤的频域场传递函数和参数换算为
+\begin{align}
+H_{\mathrm{fiber}}(f)&=
+\exp\!\left(-\frac{\alpha_PL}{2}\right)
+\exp\!\left(\mathrm{j}\frac{\beta_2(2\pi f)^2L}{2}\right),\\
+\beta_2&=-\frac{D\lambda_0^2}{2\pi c}.
+\end{align}
+WaveShaper 在 \pkg{fftshift} 频率轴上插值可训练的衰减与相位控制点：
+\begin{equation}
+H_{\mathrm{WS}}(f)=10^{-A(f)/20}\exp\!\bigl(\mathrm{j}\theta(f)\bigr).
+\end{equation}
+四输入单输出 MZI 使用 $1/2$ 的场归一化，保证无损组合时能量标度正确。
+
+\subsection{EDFA、饱和与 ASE}
+小信号 EDFA 的峰值净功率增益和 Gaussian 频率响应为
+\begin{align}
+G_{\mathrm{peak,dB}}&=s\max(I_{\mathrm{pump}}-I_{\mathrm{tr}},0)-L_{\mathrm{dB}},\\
+G_P(f)&=10^{G_{\mathrm{peak,dB}}/10}
+\exp\!\left[-4\ln2\left(\frac{f-f_0}{B}\right)^2\right].
+\end{align}
+在 $f=f_0\pm B/2$ 处功率增益为峰值的一半；场使用 $\sqrt{G_P(f)}$。
+
+饱和模型和一偏振复包络、双边 PSD 下的 ASE 为
+\begin{align}
+G_{\mathrm{eff}}&=\frac{G_{\mathrm{ss}}}{1+P_{\mathrm{in}}/P_{\mathrm{sat}}},\\
+S_{\mathrm{ASE}}(f)&=n_{\mathrm{sp}}h\nu
+\max(G_{\mathrm{eff}}(f)-1,0),&
+n_{\mathrm{sp}}&=\frac{10^{\mathrm{NF}_{\mathrm{dB}}/10}}{2}.
+\end{align}
+对长度为 $N$ 的 \pkg{ifft}，频域复高斯噪声方差取
+\begin{equation}
+\operatorname{Var}\{N[k]\}=N^2S_{\mathrm{ASE}}(f_k)\Delta f,
+\end{equation}
+于是 IFFT 后的期望平均噪声功率为 $\sum_kS_{\mathrm{ASE}}(f_k)\Delta f$。
+
+\section{功能模块、链路和训练}
+\subsection{复值卷积和长序列 FIR}
+\pkg{OpticalChain} 串联只接收单一 \pkg{field} 参数的器件；调制器需在自定义网络的 \pkg{forward} 中显式传入电压。
+
+\pkg{ComplexConv1d} 的实虚部由四次实卷积组成：
+\begin{align}
+\Re(y)&=x_r*w_r-x_i*w_i,\\
+\Im(y)&=x_r*w_i+x_i*w_r.
+\end{align}
+偏置只加入一次，避免重复。
+
+\pkg{OverlapSaveFIR} 实现可训练复因果 FIR：
+\begin{equation}
+y[n]=\sum_{m=0}^{M-1}h[m]x[n-m],\qquad
+N_{\mathrm{FFT}}>M-1.
+\end{equation}
+它在输入前补零，将每个频域块开头 $M-1$ 个循环卷积样本丢弃，因此输出严格对应线性因果卷积。
+
+\subsection{最小可运行链路}
+\begin{lstlisting}[language=Python]
+import torch
+from optosimlab import SimulationGrid, MachZehnderModulator
+from optosimlab import LinearDispersiveFiber
+
+grid = SimulationGrid(sample_rate_hz=100e9)
+samples = 4096
+t = torch.arange(samples) / grid.sample_rate_hz
+carrier = torch.ones(samples, dtype=torch.complex64)
+drive = 0.5 * torch.sin(2 * torch.pi * 5e9 * t)
+mzm = MachZehnderModulator(v_pi=1.0, bias_voltage=0.5)
+fiber = LinearDispersiveFiber(
+    grid, length_m=10e3, attenuation_db_per_km=0.2,
+    dispersion_ps_nm_km=17.0)
+field_out = fiber(mzm(carrier, drive))
+\end{lstlisting}
+
+\subsection{只训练需要训练的参数}
+\begin{lstlisting}[language=Python]
+optimizer = torch.optim.Adam([mzm.bias_voltage], lr=3e-2)
+optimizer.zero_grad()
+field = mzm(carrier, drive)
+loss = (field.abs().square().mean() - 0.5).square()
+loss.backward()
+optimizer.step()
+\end{lstlisting}
+可训练不代表所有参数都必须训练；只把有明确物理含义且允许调节的参数交给优化器。
+
+\section{自检记录与验收门禁}
+\subsection{已完成的专项自检}
+\begin{longtable}{L{44mm}L{110mm}}
+\toprule
+\textbf{检查对象} & \textbf{已验证内容}\\
+\midrule
+\endhead
+MZM & 峰值/零点；$3\,\mathrm{dB}$ 插损的场与功率关系；$20\,\mathrm{dB}$ 消光比；梯度。\\
+低通与光纤 & Butterworth 半功率截止点；$D\leftrightarrow\beta_2$ 单位换算；损耗；无损色散能量守恒。\\
+频域光梳与电光梳 & FFT bin、谱线总功率、Bessel 边带、RF 一阶响应、Wiener 相位扩散、非法输入。\\
+EDFA & 电流-增益、$-3\,\mathrm{dB}$ 带宽、饱和、ASE PSD 与 FFT 归一化随机统计。\\
+复值和长序列模块 & 复卷积偏置一次性计入；Overlap-Save 与直接线性卷积、批量维、梯度一致。\\
+系统指标 & Parseval 频谱、眼图、EVM、等先验实高斯二元假设下的 Q 与 BER。\\
+设备一致性 & CPU 路径通过；CUDA PyTorch 环境下自动执行 CPU/CUDA 一致性测试。\\
+\bottomrule
+\end{longtable}
+
+\subsection{新增模块必须遵循的流程}
+\begin{enumerate}
+\item 写清输入/输出形状、实数或复数 dtype、单位及 FFT 定义。
+\item 将可调物理量封装为 \pkg{nn.Parameter}，拒绝不合理输入。
+\item 为至少一个可解析结论写测试，例如截止点、极值或功率守恒。
+\item 为错误 shape、dtype、负参数及冲突输入写失败测试。
+\item 确认目标参数的 \pkg{grad} 非空；高风险公式增加有限差分对照。
+\item 先跑 CPU，再在有 CUDA 时比较 CPU/GPU；最后全量测试、打包并做导入测试。
+\end{enumerate}
+
+\subsection{复现实验命令}
+\begin{lstlisting}[language=bash]
+cd F:\OptoSimLab
+.\.venv\Scripts\Activate.ps1
+python -m compileall -q src tests examples
+python -m pytest -q -p no:cacheprovider tests
+python -m pip wheel --no-deps --wheel-dir dist .
+python -c "from optosimlab import OverlapSaveFIR; print('package OK')"
+\end{lstlisting}
+\begin{tcolorbox}[colback=lightblue,colframe=teal,title=当前验收结果]
+版本 0.7.0 已完成源码编译、专项测试、全量测试和 wheel 导入验证。全量结果：\textbf{64 passed, 1 skipped}。无 CUDA 的 CPU 环境中该跳过项是预期行为；在 CUDA 环境中它会自动运行。
+\end{tcolorbox}
+
+\section{下一阶段：实测曲线标定}
+\begin{enumerate}
+\item 统一 CSV 列：频率/波长、幅度或损耗、相位、偏置和测量单位。
+\item 为 MZM 拟合 $V_\pi$、偏置、插损、消光比、RF 响应；为 EDFA 拟合电流-增益及带宽。
+\item 使用独立的保留测量曲线验证拟合误差，不能只报告训练曲线误差。
+\item 冻结或赋予合理先验后，再搭建端到端光计算训练任务。
+\end{enumerate}
+\begin{tcolorbox}[colback=lightblue,colframe=teal,title=结论]
+本平台已完成初始清单所需的器件库、功能模块、PyTorch 封装、公式验证、回归测试、打包和说明文档。下一阶段应使用可追溯的实验数据做曲线标定和系统级一致性验证。
+\end{tcolorbox}
+\end{document}

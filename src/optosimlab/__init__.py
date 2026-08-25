@@ -1,0 +1,61 @@
+"""Differentiable signal-level optical simulation primitives."""
+
+from .config import C_LIGHT, H_PLANCK, SimulationGrid
+from .blocks import ComplexConv1d, OpticalChain, OverlapSaveFIR
+from .devices import (
+    AdditiveComplexGaussianNoise,
+    ElectroOpticComb,
+    FrequencyDomainLowPass,
+    FourInputMZI,
+    LinearDispersiveFiber,
+    MachZehnderModulator,
+    MZMWithElectricalFilter,
+    OpticalAttenuator,
+    OpticalFrequencyComb,
+    PracticalElectroOpticComb,
+    SaturatedNoisyEDFA,
+    SmallSignalEDFA,
+    WaveShaper,
+)
+from .metrics import (
+    centered_frequency_axis_hz,
+    error_vector_magnitude,
+    eye_diagram,
+    gaussian_ber_estimate,
+    gaussian_q_factor,
+    mean_power,
+    normalized_mean_square_error,
+    power_spectrum,
+    snr_db,
+)
+
+__all__ = [
+    "C_LIGHT",
+    "H_PLANCK",
+    "SimulationGrid",
+    "AdditiveComplexGaussianNoise",
+    "ElectroOpticComb",
+    "ComplexConv1d",
+    "FrequencyDomainLowPass",
+    "FourInputMZI",
+    "LinearDispersiveFiber",
+    "MachZehnderModulator",
+    "MZMWithElectricalFilter",
+    "OpticalAttenuator",
+    "OpticalFrequencyComb",
+    "PracticalElectroOpticComb",
+    "SaturatedNoisyEDFA",
+    "SmallSignalEDFA",
+    "OpticalChain",
+    "OverlapSaveFIR",
+    "WaveShaper",
+    "mean_power",
+    "normalized_mean_square_error",
+    "centered_frequency_axis_hz",
+    "error_vector_magnitude",
+    "eye_diagram",
+    "gaussian_ber_estimate",
+    "gaussian_q_factor",
+    "power_spectrum",
+    "snr_db",
+]
