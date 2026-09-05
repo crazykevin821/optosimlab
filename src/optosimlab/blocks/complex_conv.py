@@ -8,9 +8,12 @@ from torch.nn import functional as F
 
 
 class ComplexConv1d(nn.Module):
-    """Complex 1-D convolution using four real convolutions.
+    """Legacy mathematical complex 1-D convolution using real convolutions.
 
     Input and output use shape ``(batch, channels, samples)`` and complex dtype.
+    This remains for generic neural-network compatibility; it is not a model of
+    the Xu et al. 2021 photonic convolution hardware.  Use
+    PhotonicRealConvolution for the physical WDM route.
     """
 
     def __init__(self, in_channels: int, out_channels: int, kernel_size: int, **kwargs: object) -> None:

@@ -14,8 +14,9 @@ from .base import nonnegative_parameter
 class OpticalFrequencyComb(nn.Module):
     """Generate a carrier-centred, discrete optical frequency comb.
 
-    The source contains an odd number of lines at offsets
-    ``k * line_spacing_hz`` where ``k = -(line_count//2), ..., +(line_count//2)``.
+    The source contains lines on integer multiples of line_spacing_hz.  Odd
+    counts are symmetric about the carrier; even counts use offsets
+    -line_count/2, ..., line_count/2-1 and therefore still include the carrier.
     Each line has trainable power and phase.  A line must fall exactly on an FFT
     bin for the requested record length; this deterministic first version
     rejects off-bin spacings rather than silently introducing spectral leakage.
@@ -39,8 +40,8 @@ class OpticalFrequencyComb(nn.Module):
         super().__init__()
         if line_spacing_hz <= 0:
             raise ValueError("line_spacing_hz must be positive")
-        if line_count < 1 or line_count % 2 == 0:
-            raise ValueError("line_count must be a positive odd integer so one line is at the carrier")
+        if line_count < 1:
+            raise ValueError("line_count must be a positive integer")
         self.grid = grid
         self.line_spacing_hz = float(line_spacing_hz)
         self.line_count = int(line_count)
@@ -77,7 +78,7 @@ class OpticalFrequencyComb(nn.Module):
                 "line_spacing_hz must be an integer multiple of sample_rate_hz / samples; "
                 "choose an aligned record length or implement an interpolation model"
             )
-        offsets = torch.arange(-(self.line_count // 2), self.line_count // 2 + 1, dtype=torch.long)
+        offsets = torch.arange(-(self.line_count // 2), self.line_count - self.line_count // 2, dtype=torch.long)
         signed_bins = offsets * integer_spacing
         if int(signed_bins.abs().max()) > (samples - 1) // 2:
             raise ValueError("comb lines exceed the representable positive/negative frequency range")
@@ -103,3 +104,33 @@ class OpticalFrequencyComb(nn.Module):
     def forward(self, samples: int, *, device: torch.device | None = None, real_dtype: torch.dtype | None = None) -> Tensor:
         """Generate a one-dimensional complex envelope with ``samples`` points."""
         return torch.fft.ifft(self.spectrum(samples, device=device, real_dtype=real_dtype))
+
+    def channel_fields(
+        self,
+        samples: int,
+        *,
+        device: torch.device | None = None,
+        real_dtype: torch.dtype | None = None,
+    ) -> Tensor:
+        """Return separated comb-line envelopes with shape (line_count, samples).
+
+        Each row is one coherent tone in sqrt(W), and its time-averaged power
+        is exactly the corresponding line_powers entry.  Unlike spectrum(),
+        this separated-channel representation does not require the finite
+        record to contain an integer number of tone periods.
+        """
+        if samples <= 0:
+            raise ValueError("samples must be positive")
+        device = device or self.line_powers.device
+        dtype = real_dtype or self.line_powers.dtype
+        powers = nonnegative_parameter(self.line_powers, "line_powers").to(device=device, dtype=dtype)
+        phases = self.line_phases_rad.to(device=device, dtype=dtype)
+        offsets = torch.arange(
+            -(self.line_count // 2), self.line_count - self.line_count // 2,
+            device=device, dtype=dtype,
+        ) * self.line_spacing_hz
+        if torch.any(offsets.abs() > self.grid.sample_rate_hz / 2):
+            raise ValueError("comb lines exceed the representable positive/negative frequency range")
+        time = torch.arange(samples, device=device, dtype=dtype) / self.grid.sample_rate_hz
+        angles = 2.0 * torch.pi * offsets.unsqueeze(-1) * time + phases.unsqueeze(-1)
+        return torch.sqrt(powers).unsqueeze(-1) * torch.polar(torch.ones_like(angles), angles)

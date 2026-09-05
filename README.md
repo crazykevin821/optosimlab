@@ -9,7 +9,7 @@
 当前开发环境和基础模块已经验证可用：
 
 ```text
-64 passed, 1 skipped (CUDA unavailable)
+82 passed, 1 skipped (CUDA unavailable)
 ```
 
 已完成：
@@ -17,24 +17,107 @@
 | 类别 | 模块 | 状态 |
 | --- | --- | --- |
 | 核心 | `SimulationGrid`、FFT 频率约定、功率/SNR/NMSE 指标 | 已完成 |
-| 调制 | `MachZehnderModulator` | 已完成 |
+| 调制 | `MachZehnderModulator`、`MeasuredMZM` 实测曲线 | 已完成 |
 | 调制 | `MZMWithElectricalFilter` | 已完成 |
 | 滤波 | `FrequencyDomainLowPass` | 已完成 |
 | 传输 | `LinearDispersiveFiber`，损耗和二阶色散 | 已完成 |
 | 整形 | `WaveShaper`，可训练衰减和相位遮罩 | 已完成 |
-| 干涉 | `FourInputMZI` | 已完成 |
+| 干涉 | `PowerSplitter1x2`、`DirectionalCoupler2x2`、单/双输入 MZI | 已完成 |
 | 非理想 | `OpticalAttenuator`、`AdditiveComplexGaussianNoise` | 已完成 |
-| 功能块 | `OpticalChain`、`ComplexConv1d` | 已完成 |
+| 功能块 | 支持分支/汇合的图式 `OpticalChain` | 已完成 |
+| 光计算 | Xu 等 Nature 2021 路线的实值 WDM 光卷积 | 已完成 |
 | 长序列 | `OverlapSaveFIR`，可训练复 FIR 的线性卷积 | 已完成 |
 | 示例 | MZM 偏置的端到端自动微分训练 | 已完成 |
 | 光源 | `OpticalFrequencyComb`，离散谱线、每线功率和相位 | 已完成 |
 | 光源 | `ElectroOpticComb`，时域相位调制、级联 RF 驱动与总插损 | 已完成 |
 | 光源 | `PracticalElectroOpticComb`，RF 一阶带宽与 Wiener 相位噪声 | 已完成 |
-| 放大 | `SmallSignalEDFA`，电流映射、频率增益带宽和插损 | 已完成 |
+| 放大 | `GainControlledEDFA`，商用增益 dB 控制、饱和与 ASE | 已完成 |
 | 放大 | `SaturatedNoisyEDFA`，小信号增益、ASE、饱和和噪声系数 | 已完成 |
-| 网络层 | 调制器非线性功能块 | 暂缓，待物理模型确定 |
+| 兼容层 | `FourInputMZI`、电流映射 EDFA、`ComplexConv1d` | 仅保留 v0.7 兼容，不作为物理推荐路径 |
 
 详细的物理约定和公式自检记录见 `docs/OptoSimLab_使用说明.pdf`。
+
+### 1.1 默认单位（所有公开接口）
+
+| 物理量 | 单位/约定 |
+| --- | --- |
+| 复光场 `field` | √W，且 `abs(field)**2` 为瞬时功率 W |
+| 光功率 | W；显示或器件指标可用 dBm，0 dBm = 1 mW |
+| 电压 | V |
+| 时间、频率、波长、长度 | s、Hz、m、m |
+| 相位 | rad |
+| 增益/损耗 | dB 功率比；场系数使用 `10**(dB/20)` |
+
+可直接使用 `dbm_to_w`、`w_to_dbm`、`db_to_power_ratio`、`db_to_field_ratio` 和 `field_from_power_w`，避免在用户代码中重复写换算公式。
+
+### 1.2 Nature 2021 实值光卷积（推荐路径）
+
+对应 Xingyuan Xu 等人的微梳卷积架构：等间隔光梳 → WaveShaper 把权重映射到每线功率 → 强度调制器把同一输入广播到各梳齿 → 色散产生逐通道递增延时 → 低带宽光电探测器对各通道功率求和。
+
+```python
+import torch
+from optosimlab import PhotonicRealConvolution
+
+x = torch.tensor([0.1, 0.3, 0.7, 1.0, 0.2, 0.6])
+w = torch.tensor([0.2, 0.5, 0.8])       # 单支路权重必须在 [0, 1]
+
+conv = PhotonicRealConvolution(
+    w,
+    sample_rate_hz=100e9,
+    line_spacing_hz=10e9,
+    line_power_w=1e-3,
+    tap_delay_samples=1,
+)
+y = conv(x)                              # 校准后的无量纲因果卷积
+p_detector_w = conv.detected_power_w(x) # 真实探测功率，单位 W
+assert torch.allclose(p_detector_w, 1e-3 * y, atol=1e-9)
+```
+
+本模块的逐点定义是 `y[n] = Σ_k w[k] x[n-kD]`，记录开始前补零，不使用循环卷积。单个无源 WaveShaper 支路只能实现同号非负权重；有符号权重使用 `DifferentialPhotonicConvolution` 的正、负双探测支路相减。`ComplexConv1d` 只保留作数学神经网络兼容层，不再代表该物理系统。
+
+### 1.3 并行光路、商用 EDFA 和实测调制器
+
+```python
+import torch
+from optosimlab import (
+    GainControlledEDFA, MeasuredMZM, OpticalChain,
+    PowerSplitter1x2, SimulationGrid,
+)
+
+# 商用品常见的增益控制接口：gain_db，而不是泵浦电流
+edfa = GainControlledEDFA(
+    SimulationGrid(100e9), gain_db=20.0,
+    output_saturation_power_dbm=20.0, noise_figure_db=5.0,
+)
+
+# CSV 列名默认为 voltage_v,power_transmission；可选 phase_rad
+mzm = MeasuredMZM.from_csv("mzm_curve.csv", phase_column="phase_rad")
+
+# 图式链路允许一个输出扇出到并行路径，也允许多输入汇合
+graph = OpticalChain.from_graph(
+    [("split", PowerSplitter1x2(0.5), "input", ("upper", "lower"))],
+    outputs=("upper", "lower"),
+)
+ports = graph(torch.ones(1024, dtype=torch.complex64))
+```
+
+实测曲线在标定电压范围内分段线性插值，范围外钳位到端点；`power_transmission` 必须在 `[0,1]`。2×2 定向耦合器采用交叉端口带 `j` 相位的幺正矩阵，单输入和双输入单输出 MZI 均由两只该耦合器与差分相移组成。
+
+### 1.4 v0.8 专项验证
+
+```powershell
+cd F:\OptoSimLab
+.\.venv\Scripts\Activate.ps1
+python -m pytest -q -p no:cacheprovider tests\test_units.py
+python -m pytest -q -p no:cacheprovider tests\test_gain_controlled_edfa.py
+python -m pytest -q -p no:cacheprovider tests\test_mzi_components.py
+python -m pytest -q -p no:cacheprovider tests\test_optical_graph.py
+python -m pytest -q -p no:cacheprovider tests\test_measured_mzm.py
+python -m pytest -q -p no:cacheprovider tests\test_photonic_convolution.py
+python -m pytest -q -p no:cacheprovider tests
+```
+
+最后一条全量测试通过才算完成。专项测试分别验证单位、EDFA 峰值/FWHM/饱和/ASE、耦合器幺正性与 MZI 解析点、图式分支汇合、实测曲线插值，以及光学链路逐点等于直接实卷积。
 
 ## 2. 每次开始开发时
 
@@ -48,7 +131,7 @@ python -c "import torch, numpy; print('torch =', torch.__version__); print('nump
 python -m pytest
 ```
 
-成功标准：最后一条命令显示 `64 passed` 或更多，且没有失败项目；没有 CUDA 时会额外显示 1 项明确跳过的 GPU 一致性测试。
+成功标准：最后一条命令显示 `82 passed` 或更多，且没有失败项目；没有 CUDA 时会额外显示 1 项明确跳过的 GPU 一致性测试。
 
 如果 PowerShell 不允许激活虚拟环境，只对当前窗口执行：
 
@@ -216,7 +299,9 @@ python -m pytest tests\test_practical_electro_optic_comb.py -q
 
 预期结果为 `5 passed`。
 
-## 8. 已完成：小信号 EDFA
+## 8. v0.7 兼容模块：电流映射小信号 EDFA
+
+> 新链路请使用前文的 `GainControlledEDFA`。本节只说明为旧代码保留的 `SmallSignalEDFA`。
 
 `SmallSignalEDFA` 是无噪声、无饱和的确定性频域放大器，使用以下功率增益：
 
@@ -240,9 +325,9 @@ python -m pytest tests\test_edfa.py -q
 
 预期结果为 `6 passed`。测试覆盖电流-增益映射、功率 dB 插损、-3 dB FWHM、中心失谐、无额外相位、梯度，以及非法参数和 dtype 的拒绝逻辑。
 
-## 9. 已完成：饱和与 ASE EDFA
+## 9. v0.7 兼容模块：电流映射饱和与 ASE EDFA
 
-`SaturatedNoisyEDFA` 继承小信号 EDFA，并在同一封装中加入增益饱和和 ASE：
+`SaturatedNoisyEDFA` 继承旧小信号 EDFA，并在同一封装中加入增益饱和和 ASE；新链路仍应使用 `GainControlledEDFA`：
 
 ```text
 G_eff(f) = G_ss(f) / (1 + P_in / P_sat)

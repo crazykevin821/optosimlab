@@ -29,8 +29,8 @@ xleftmargin=0.5em,xrightmargin=0.5em,aboveskip=0.7em,belowskip=0.7em}
 
 \title{\textcolor{navy}{\Huge OptoSimLab}\\[0.6em]
 \textcolor{teal}{\Large 使用说明与公式自检记录}}
-\author{版本 0.7.0 \quad 项目位置：\texttt{F:\textbackslash OptoSimLab}}
-\date{2026-08-25}
+\author{版本 0.8.0 \quad 项目位置：\texttt{F:\textbackslash OptoSimLab}}
+\date{2026-09-06}
 
 \begin{document}
 \maketitle
@@ -45,24 +45,25 @@ OptoSimLab 是基于 PyTorch 的\textbf{复包络、信号级、可微分}光学
 
 全部器件按“一器件一 \pkg{torch.nn.Module}”封装。需要优化的物理量注册为 \pkg{nn.Parameter}，可被优化器、\pkg{state\_dict()} 和 \pkg{.to(device)} 管理。
 
-\begin{longtable}{L{27mm}L{83mm}L{44mm}}
+\begin{longtable}{L{27mm}L{82mm}L{44mm}}
 \toprule
 \textbf{类别} & \textbf{已实现内容} & \textbf{验证重点}\\
 \midrule
 \endhead
 核心约定 & \pkg{SimulationGrid}、FFT 频率轴、物理常数 & 频率轴、单位\\
-调制器 & 理想/有限消光比 MZM、低通驱动 MZM & 峰值、零点、梯度\\
+调制器 & 理想/有限消光比 MZM、低通驱动 MZM、实测曲线 MZM & 峰值、插值、梯度\\
 频域器件 & Butterworth 低通、WaveShaper、色散光纤 & 截止点、损耗、相位\\
 光梳 & 严格 FFT bin 对齐的频域光梳 & 谱线位置、总功率\\
 电光梳 & 理想级联相位调制、RF 一阶响应、Wiener 相位噪声 & Bessel 边带、功率\\
-放大器 & 小信号 EDFA、饱和与 ASE EDFA & 带宽、PSD 归一化\\
-功能模块 & 器件链、复值卷积、Overlap-Save FIR & 批量、梯度、卷积\\
+放大器 & 商用增益控制 EDFA；旧电流模型仅兼容 & 带宽、饱和、ASE\\
+干涉器件 & 1$\times$2 分束器、2$\times$2 耦合器、单/双输入 MZI & 幺正性、差分响应\\
+功能模块 & 串行/图式器件链、Nature 2021 实值光卷积 & 分支汇合、逐点卷积\\
 系统指标 & 频谱、眼图、EVM、Gaussian-Q BER & Parseval、一致性\\
 \bottomrule
 \end{longtable}
 
 \begin{tcolorbox}[colback=lightblue,colframe=teal,title=真实器件边界]
-当前是参数化工程模型。实测曲线 CSV 导入、自动拟合以及与指定硬件逐项标定属于下一阶段；没有实测数据时，不能把仿真结果宣称为已与任一真实设备完全一致。
+当前是参数化工程模型。MZM 已支持实测 CSV 曲线导入和插值，但仓库不附带特定硬件的测量数据。没有可追溯的实测数据时，不能把仿真结果宣称为已与任一真实设备完全一致。
 \end{tcolorbox}
 
 \section{环境、安装和首次验证}
@@ -74,7 +75,7 @@ cd F:\OptoSimLab
 python -m pytest -q -p no:cacheprovider tests
 python examples\train_mzm_bias.py
 \end{lstlisting}
-当前 Windows CPU 环境的验收结果是：\textbf{64 项通过，1 项跳过}。跳过项是 CPU/CUDA 一致性测试，因为当前 PyTorch 不带 CUDA；这不是测试失败。
+当前 Windows CPU 环境的验收结果是：\textbf{82 项通过，1 项跳过}。跳过项是 CPU/CUDA 一致性测试，因为当前 PyTorch 不带 CUDA；这不是测试失败。
 
 \subsection{从零安装}
 \begin{lstlisting}[language=bash]
@@ -91,8 +92,8 @@ python -m pytest -q -p no:cacheprovider tests
 \begin{lstlisting}[language=bash]
 cd F:\OptoSimLab
 .\.venv\Scripts\Activate.ps1
-python -m pip install --force-reinstall --no-deps .\dist\optosimlab-0.7.0-py3-none-any.whl
-python -c "from optosimlab import OverlapSaveFIR; print('import OK')"
+python -m pip install --force-reinstall --no-deps .\dist\optosimlab-0.8.0-py3-none-any.whl
+python -c "from optosimlab import PhotonicRealConvolution; print('import OK')"
 \end{lstlisting}
 
 \section{统一信号与数学约定}
@@ -119,6 +120,14 @@ P_{\mathrm{bin}}[k]=\frac{|X[k]|^2}{N^2},\qquad
 \end{equation}
 所以满足 Parseval 一致性。
 
+\subsection{默认物理单位}
+公开接口统一采用 SI：光场为 $\sqrt{\mathrm{W}}$，光功率为 $\mathrm{W}$，电压为 $\mathrm{V}$，时间为 $\mathrm{s}$，频率为 $\mathrm{Hz}$，波长与长度为 $\mathrm{m}$，相位为 $\mathrm{rad}$。显示功率可使用 dBm：
+\begin{align}
+P_{\mathrm{W}}&=10^{P_{\mathrm{dBm}}/10}\times10^{-3},\\
+P_{\mathrm{dBm}}&=10\log_{10}\!\left(\frac{P_{\mathrm{W}}}{10^{-3}}\right).
+\end{align}
+例如 $0\,\mathrm{dBm}=1\,\mathrm{mW}=10^{-3}\,\mathrm{W}$。源码中的 \pkg{units.py} 提供统一换算，禁止混用 mW 与 W。
+
 \section{器件公式与正确使用方式}
 \subsection{MZM 与电驱动低通}
 理想推挽 MZM 的场传输公式为
@@ -135,6 +144,15 @@ E_{\mathrm{out}}(t)=E_{\mathrm{in}}(t)
 H_{\mathrm{LP}}(f)=\left[1+\left(\frac{|f|}{f_c}\right)^{2n}\right]^{-1/2}.
 \end{equation}
 因此在 $|f|=f_c$ 处有 $|H_{\mathrm{LP}}|^2=1/2$，即 $-3.0103\,\mathrm{dB}$ 功率点。
+
+实测 MZM 用电压节点 $(V_i,T_i,\phi_i)$ 描述，$T_i\in[0,1]$ 是功率透射率。在相邻节点之间采用分段线性插值，超出标定范围时钳位到端点：
+\begin{align}
+T(V)&=(1-a)T_i+aT_{i+1},\\
+\phi(V)&=(1-a)\phi_i+a\phi_{i+1},\qquad
+a=\frac{V-V_i}{V_{i+1}-V_i},\\
+E_{\mathrm{out}}&=E_{\mathrm{in}}\sqrt{T(V)}\exp[\mathrm{j}\phi(V)].
+\end{align}
+CSV 默认列为 \pkg{voltage\_v,power\_transmission}，可选列为 \pkg{phase\_rad}。钳位是为了避免对未测区域作无依据外推，不代表真实器件在范围外恒定。
 
 \subsection{频域光梳与理想电光梳}
 频域光梳每条谱线都必须落在 FFT bin 上：
@@ -181,20 +199,45 @@ WaveShaper 在 \pkg{fftshift} 频率轴上插值可训练的衰减与相位控�
 \begin{equation}
 H_{\mathrm{WS}}(f)=10^{-A(f)/20}\exp\!\bigl(\mathrm{j}\theta(f)\bigr).
 \end{equation}
-四输入单输出 MZI 使用 $1/2$ 的场归一化，保证无损组合时能量标度正确。
+
+\subsection{分束器、定向耦合器与 MZI}
+1$\times$2 分束器的功率分配比为 $r$，无插损时
+\begin{equation}
+\begin{bmatrix}E_0\\E_1\end{bmatrix}
+=\begin{bmatrix}\sqrt r\\\sqrt{1-r}\end{bmatrix}E_{\mathrm{in}},
+\qquad |E_0|^2+|E_1|^2=|E_{\mathrm{in}}|^2.
+\end{equation}
+2$\times$2 定向耦合器保留交叉耦合的正交相位：
+\begin{equation}
+\bm C(r)=
+\begin{bmatrix}
+\sqrt r & \mathrm{j}\sqrt{1-r}\\
+\mathrm{j}\sqrt{1-r} & \sqrt r
+\end{bmatrix},\qquad \bm C^{\mathrm H}\bm C=\bm I.
+\end{equation}
+MZI 使用 $\bm C\,\operatorname{diag}(e^{\mathrm{j}x},e^{-\mathrm{j}x})\bm C$，其中
+$x=\pi(V+V_{\mathrm{bias}})/(2V_\pi)$。当 $r=1/2$ 且观察端口为 1 时，双输入单输出结果为
+\begin{equation}
+E_{\mathrm{out}}=\mathrm{j}\left[\cos(x)E_0-\sin(x)E_1\right].
+\end{equation}
+令 $E_1=0$ 即得到单输入单输出 MZI。旧 \pkg{FourInputMZI} 仅为 v0.7 代码兼容，不再作为推荐物理模型。
 
 \subsection{EDFA、饱和与 ASE}
-小信号 EDFA 的峰值净功率增益和 Gaussian 频率响应为
+推荐的 \pkg{GainControlledEDFA} 使用商用放大器常见的净增益设定 $G_{\mathrm{set,dB}}$，而不是让用户控制内部泵浦电流。未饱和功率增益为
 \begin{align}
-G_{\mathrm{peak,dB}}&=s\max(I_{\mathrm{pump}}-I_{\mathrm{tr}},0)-L_{\mathrm{dB}},\\
-G_P(f)&=10^{G_{\mathrm{peak,dB}}/10}
+G_{\mathrm{ss}}(f)&=10^{G_{\mathrm{set,dB}}/10}
 \exp\!\left[-4\ln2\left(\frac{f-f_0}{B}\right)^2\right].
 \end{align}
-在 $f=f_0\pm B/2$ 处功率增益为峰值的一半；场使用 $\sqrt{G_P(f)}$。
+在 $f=f_0\pm B/2$ 处功率增益为峰值的一半；场使用 $\sqrt{G_{\mathrm{ss}}(f)}$。
 
-饱和模型和一偏振复包络、双边 PSD 下的 ASE 为
+以输出饱和功率 $P_{\mathrm{sat,out}}$ 表示的平滑压缩模型为
 \begin{align}
-G_{\mathrm{eff}}&=\frac{G_{\mathrm{ss}}}{1+P_{\mathrm{in}}/P_{\mathrm{sat}}},\\
+G_{\mathrm{eff}}&=1+\frac{G_{\mathrm{ss}}-1}
+{1+G_{\mathrm{ss}}P_{\mathrm{in}}/P_{\mathrm{sat,out}}},
+\qquad G_{\mathrm{ss}}\ge 1.
+\end{align}
+当 $G_{\mathrm{ss}}<1$ 时保持原频带整形值，不把带外损耗错误改为单位增益。一偏振复包络、双边 PSD 下的 ASE 为
+\begin{align}
 S_{\mathrm{ASE}}(f)&=n_{\mathrm{sp}}h\nu
 \max(G_{\mathrm{eff}}(f)-1,0),&
 n_{\mathrm{sp}}&=\frac{10^{\mathrm{NF}_{\mathrm{dB}}/10}}{2}.
@@ -205,9 +248,11 @@ n_{\mathrm{sp}}&=\frac{10^{\mathrm{NF}_{\mathrm{dB}}/10}}{2}.
 \end{equation}
 于是 IFFT 后的期望平均噪声功率为 $\sum_kS_{\mathrm{ASE}}(f_k)\Delta f$。
 
+旧 \pkg{SmallSignalEDFA} 和 \pkg{SaturatedNoisyEDFA} 的泵浦电流接口仅为 v0.7 兼容，不应用于新的商用品级链路配置。
+
 \section{功能模块、链路和训练}
 \subsection{复值卷积和长序列 FIR}
-\pkg{OpticalChain} 串联只接收单一 \pkg{field} 参数的器件；调制器需在自定义网络的 \pkg{forward} 中显式传入电压。
+\pkg{OpticalChain} 保留串行构造方式，并新增 \pkg{from\_graph}。图节点显式声明模块、输入名和输出名，按拓扑顺序执行，因此同一个值可扇出到多个并行支路，分束器可返回多个端口，耦合器或探测器可重新汇合多个输入。若只有一个最终输出则返回张量；多个最终输出按名称返回字典。
 
 \pkg{ComplexConv1d} 的实虚部由四次实卷积组成：
 \begin{align}
@@ -215,6 +260,7 @@ n_{\mathrm{sp}}&=\frac{10^{\mathrm{NF}_{\mathrm{dB}}/10}}{2}.
 \Im(y)&=x_r*w_i+x_i*w_r.
 \end{align}
 偏置只加入一次，避免重复。
+它是数学复值网络兼容层，并不表示 Xu 等人的微梳光卷积硬件；物理路线应使用 \pkg{PhotonicRealConvolution}。
 
 \pkg{OverlapSaveFIR} 实现可训练复因果 FIR：
 \begin{equation}
@@ -222,6 +268,43 @@ y[n]=\sum_{m=0}^{M-1}h[m]x[n-m],\qquad
 N_{\mathrm{FFT}}>M-1.
 \end{equation}
 它在输入前补零，将每个频域块开头 $M-1$ 个循环卷积样本丢弃，因此输出严格对应线性因果卷积。
+
+\subsection{Nature 2021 实值 WDM 光卷积}
+实现链路遵循 Xu 等人在 Nature 2021 报道的结构：等间隔光梳在一根光纤中并行传播，WaveShaper 将卷积核系数映射到各梳齿功率，单个强度调制器把待计算序列广播到所有梳齿，色散使第 $k$ 个通道产生 $kD$ 个采样点的递增延时，最后在同一时刻平方律探测并求和。
+
+设每条输入梳齿功率均为 $P_{\mathrm{line}}$，单支路权重 $w_k\in[0,1]$，归一化输入 $x[n]\ge0$。WaveShaper 和广播调制后的通道场分别为
+\begin{align}
+E_k^{(w)}[n]&=\sqrt{w_k}\,E_k[n],\\
+E_k^{(m)}[n]&=\sqrt{x[n]},E_k^{(w)}[n].
+\end{align}
+零填充递增延时与低带宽探测器输出为
+\begin{align}
+E_k^{(d)}[n]&=E_k^{(m)}[n-kD],\\
+P_{\mathrm{det}}[n]&=\sum_k\left|E_k^{(d)}[n]\right|^2
+=P_{\mathrm{line}}\sum_k w_kx[n-kD].
+\end{align}
+因此校准输出
+\begin{equation}
+y[n]=\frac{P_{\mathrm{det}}[n]}{P_{\mathrm{line}}}
+=\sum_k w_kx[n-kD]
+\end{equation}
+逐点等于零初始状态的因果实卷积。探测器“先按通道求功率再相加”等效于其电带宽低于梳齿间隔，因而滤除通道间拍频。单个无源 WaveShaper 支路只能给出同号权重。
+
+有符号卷积使用 \pkg{DifferentialPhotonicConvolution}，将正、负权重分到两个探测支路后作差。
+
+\begin{lstlisting}[language=Python]
+import torch
+from optosimlab import PhotonicRealConvolution
+
+x = torch.tensor([0.1, 0.3, 0.7, 1.0, 0.2, 0.6])
+w = torch.tensor([0.2, 0.5, 0.8])
+conv = PhotonicRealConvolution(
+    w, sample_rate_hz=100e9, line_spacing_hz=10e9,
+    line_power_w=1e-3, tap_delay_samples=1)
+y = conv(x)
+p_w = conv.detected_power_w(x)
+assert torch.allclose(p_w, 1e-3 * y, atol=1e-9)
+\end{lstlisting}
 
 \subsection{最小可运行链路}
 \begin{lstlisting}[language=Python]
@@ -260,9 +343,13 @@ optimizer.step()
 \midrule
 \endhead
 MZM & 峰值/零点；$3\,\mathrm{dB}$ 插损的场与功率关系；$20\,\mathrm{dB}$ 消光比；梯度。\\
+实测 MZM & 标定节点、区间线性插值、范围外钳位、CSV 列读取及曲线参数梯度。\\
+分束/耦合/MZI & 总功率守恒、2$\times$2 幺正性、交叉端口 $\mathrm{j}$ 相位、单/双输入解析峰值与零点。\\
 低通与光纤 & Butterworth 半功率截止点；$D\leftrightarrow\beta_2$ 单位换算；损耗；无损色散能量守恒。\\
 频域光梳与电光梳 & FFT bin、谱线总功率、Bessel 边带、RF 一阶响应、Wiener 相位扩散、非法输入。\\
-EDFA & 电流-增益、$-3\,\mathrm{dB}$ 带宽、饱和、ASE PSD 与 FFT 归一化随机统计。\\
+EDFA & dB 增益设定、$-3\,\mathrm{dB}$ 带宽、饱和单调性、ASE PSD 非负和梯度；确认新接口无泵浦电流。\\
+图式链路 & 分束器多输出、并行支路、双输入汇合、缺失连接错误提示。\\
+Nature 实值卷积 & WaveShaper 功率权重、广播、零填充递增延时、探测功率及正/负双支路逐点对照直接卷积。\\
 复值和长序列模块 & 复卷积偏置一次性计入；Overlap-Save 与直接线性卷积、批量维、梯度一致。\\
 系统指标 & Parseval 频谱、眼图、EVM、等先验实高斯二元假设下的 Q 与 BER。\\
 设备一致性 & CPU 路径通过；CUDA PyTorch 环境下自动执行 CPU/CUDA 一致性测试。\\
@@ -289,17 +376,21 @@ python -m pip wheel --no-deps --wheel-dir dist .
 python -c "from optosimlab import OverlapSaveFIR; print('package OK')"
 \end{lstlisting}
 \begin{tcolorbox}[colback=lightblue,colframe=teal,title=当前验收结果]
-版本 0.7.0 已完成源码编译、专项测试、全量测试和 wheel 导入验证。全量结果：\textbf{64 passed, 1 skipped}。无 CUDA 的 CPU 环境中该跳过项是预期行为；在 CUDA 环境中它会自动运行。
+版本 0.8.0 已完成源码编译、专项测试、全量测试和 wheel 导入验证。全量结果：\textbf{82 passed, 1 skipped}。无 CUDA 的 CPU 环境中该跳过项是预期行为；在 CUDA 环境中它会自动运行。
 \end{tcolorbox}
 
-\section{下一阶段：实测曲线标定}
+\section{当前完成度、限制与后续实验标定}
 \begin{enumerate}
-\item 统一 CSV 列：频率/波长、幅度或损耗、相位、偏置和测量单位。
-\item 为 MZM 拟合 $V_\pi$、偏置、插损、消光比、RF 响应；为 EDFA 拟合电流-增益及带宽。
+\item 软件层已经支持 MZM CSV 曲线；下一步应导入指定型号器件的真实电压、功率透射率与相位数据。
+\item 应使用仪器数据标定 EDFA 增益谱、输出饱和功率和噪声系数；当前模型是可微的系统级近似，不含粒子数反转动力学。
 \item 使用独立的保留测量曲线验证拟合误差，不能只报告训练曲线误差。
-\item 冻结或赋予合理先验后，再搭建端到端光计算训练任务。
+\item 当前递增延时由整数采样点精确实现；若实验色散对应分数采样延时，应新增带抗混叠设计的分数延时滤波器并单独验证。
+\item 论文路线的通道功率求和假定探测器带宽低于梳齿间隔；若接收机能看到拍频，必须改用全场平方后再建模电接收带宽。
 \end{enumerate}
 \begin{tcolorbox}[colback=lightblue,colframe=teal,title=结论]
-本平台已完成初始清单所需的器件库、功能模块、PyTorch 封装、公式验证、回归测试、打包和说明文档。下一阶段应使用可追溯的实验数据做曲线标定和系统级一致性验证。
+本平台已完成初始清单和 Issue \#1 所要求的软件功能、PyTorch 封装、解析公式验证、回归测试、打包和说明文档。这里的“完成”是指模型与接口完成，不等于已替代实验：下一阶段应使用可追溯的真实器件数据做标定和系统级一致性验证。
 \end{tcolorbox}
+
+\section{参考文献}
+X.~Xu, M.~Tan, B.~Corcoran, et al., ``11 TOPS photonic convolutional accelerator for optical neural networks,'' \textit{Nature}, vol.~589, pp.~44--51, 2021. DOI: \href{https://doi.org/10.1038/s41586-020-03063-0}{10.1038/s41586-020-03063-0}.
 \end{document}

@@ -8,7 +8,128 @@ import torch
 from torch import Tensor, nn
 
 from ..config import C_LIGHT, H_PLANCK, SimulationGrid
+from ..units import db_to_power_ratio, dbm_to_w
 from .base import nonnegative_parameter, require_complex_field
+
+
+class GainControlledEDFA(nn.Module):
+    """Commercial-style gain-controlled EDFA.
+
+    The user-facing control is net peak power gain in dB, matching a
+    commercial amplifier's constant-gain mode.  Pump current and population
+    dynamics are intentionally outside this link-level model.
+
+    The unsaturated power gain is a Gaussian whose FWHM is
+    gain_bandwidth_hz.  Saturation uses a smooth output-referenced knee:
+
+        G_eff = 1 + (G_ss - 1) / (1 + G_ss * P_in / P_sat,out)
+
+    Thus the excess gain is approximately 3 dB compressed when the predicted
+    small-signal output reaches P_sat,out, while the gain remains at least one.
+    ASE uses a one-polarization complex-envelope convention.
+    """
+
+    def __init__(
+        self,
+        grid: SimulationGrid,
+        gain_db: float = 20.0,
+        gain_bandwidth_hz: float = 4e12,
+        gain_center_offset_hz: float = 0.0,
+        output_saturation_power_dbm: float = 20.0,
+        noise_figure_db: float = 5.0,
+        *,
+        enable_saturation: bool = True,
+        enable_ase: bool = True,
+        trainable: bool = True,
+    ) -> None:
+        super().__init__()
+        if gain_db < 0:
+            raise ValueError("gain_db must not be negative")
+        if gain_bandwidth_hz <= 0:
+            raise ValueError("gain_bandwidth_hz must be positive")
+        if noise_figure_db < 0:
+            raise ValueError("noise_figure_db must not be negative")
+        self.grid = grid
+        self.gain_db = nn.Parameter(torch.tensor(float(gain_db)), requires_grad=trainable)
+        self.gain_bandwidth_hz = nn.Parameter(torch.tensor(float(gain_bandwidth_hz)), requires_grad=trainable)
+        self.gain_center_offset_hz = nn.Parameter(torch.tensor(float(gain_center_offset_hz)), requires_grad=trainable)
+        self.output_saturation_power_dbm = nn.Parameter(
+            torch.tensor(float(output_saturation_power_dbm)), requires_grad=trainable
+        )
+        self.noise_figure_db = nn.Parameter(torch.tensor(float(noise_figure_db)), requires_grad=trainable)
+        self.enable_saturation = bool(enable_saturation)
+        self.enable_ase = bool(enable_ase)
+
+    def small_signal_power_gain(
+        self,
+        samples: int,
+        *,
+        device: torch.device | None = None,
+        dtype: torch.dtype | None = None,
+    ) -> Tensor:
+        """Return the FFT-order unsaturated power gain."""
+        if samples <= 0:
+            raise ValueError("samples must be positive")
+        device = device or self.gain_db.device
+        dtype = dtype or self.gain_db.dtype
+        gain_db = nonnegative_parameter(self.gain_db, "gain_db").to(device=device, dtype=dtype)
+        bandwidth = nonnegative_parameter(
+            self.gain_bandwidth_hz,
+            "gain_bandwidth_hz",
+            floor=torch.finfo(dtype).eps,
+        ).to(device=device, dtype=dtype)
+        centre = self.gain_center_offset_hz.to(device=device, dtype=dtype)
+        frequency = self.grid.frequencies_hz(samples, device=device).to(dtype=dtype)
+        profile = torch.exp(-4.0 * math.log(2.0) * ((frequency - centre) / bandwidth).square())
+        return db_to_power_ratio(gain_db).to(device=device, dtype=dtype) * profile
+
+    def effective_power_gain(self, field: Tensor) -> Tensor:
+        """Return gain after optional output-referenced saturation."""
+        require_complex_field(field)
+        gain = self.small_signal_power_gain(
+            field.shape[-1], device=field.device, dtype=field.real.dtype
+        )
+        if not self.enable_saturation:
+            return gain
+        input_power_w = field.abs().square().mean(dim=-1, keepdim=True)
+        saturation_w = dbm_to_w(
+            self.output_saturation_power_dbm.to(device=field.device, dtype=field.real.dtype)
+        )
+        excess_gain = (gain - 1.0).clamp_min(0.0)
+        saturated_amplifying_band = 1.0 + excess_gain / (1.0 + gain * input_power_w / saturation_w)
+        return torch.where(gain >= 1.0, saturated_amplifying_band, gain)
+
+    def ase_power_spectral_density(self, gain: Tensor) -> Tensor:
+        """Return one-polarization output ASE PSD in W/Hz."""
+        dtype = gain.dtype
+        device = gain.device
+        noise_figure_db = nonnegative_parameter(self.noise_figure_db, "noise_figure_db").to(
+            device=device, dtype=dtype
+        )
+        n_sp = db_to_power_ratio(noise_figure_db).to(device=device, dtype=dtype) / 2.0
+        photon_energy = torch.tensor(
+            H_PLANCK * C_LIGHT / self.grid.center_wavelength_m,
+            device=device,
+            dtype=dtype,
+        )
+        return n_sp * photon_energy * (gain - 1.0).clamp_min(0.0)
+
+    def forward(self, field: Tensor) -> Tensor:
+        """Apply gain, saturation and optional ASE to a complex field."""
+        require_complex_field(field)
+        samples = field.shape[-1]
+        gain = self.effective_power_gain(field)
+        signal = torch.fft.ifft(torch.fft.fft(field, dim=-1) * torch.sqrt(gain), dim=-1)
+        if not self.enable_ase:
+            return signal
+        psd = self.ase_power_spectral_density(gain)
+        bin_variance = samples**2 * psd * (self.grid.sample_rate_hz / samples)
+        quadrature_std = torch.sqrt(bin_variance / 2.0)
+        spectral_noise = torch.complex(
+            torch.randn_like(field.real) * quadrature_std,
+            torch.randn_like(field.real) * quadrature_std,
+        )
+        return signal + torch.fft.ifft(spectral_noise, dim=-1)
 
 
 class SmallSignalEDFA(nn.Module):
