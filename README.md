@@ -9,7 +9,7 @@
 当前开发环境和基础模块已经验证可用：
 
 ```text
-82 passed, 1 skipped (CUDA unavailable)
+91 passed, 1 skipped (CUDA unavailable)
 ```
 
 已完成：
@@ -17,15 +17,15 @@
 | 类别 | 模块 | 状态 |
 | --- | --- | --- |
 | 核心 | `SimulationGrid`、FFT 频率约定、功率/SNR/NMSE 指标 | 已完成 |
-| 调制 | `MachZehnderModulator`、`MeasuredMZM` 实测曲线 | 已完成 |
+| 调制 | 统一文件中的 `IdealMZM`、`PracticalMZM`/`MachZehnderModulator`、`MeasuredMZM` | 已完成 |
 | 调制 | `MZMWithElectricalFilter` | 已完成 |
 | 滤波 | `FrequencyDomainLowPass` | 已完成 |
 | 传输 | `LinearDispersiveFiber`，损耗和二阶色散 | 已完成 |
 | 整形 | `WaveShaper`，可训练衰减和相位遮罩 | 已完成 |
-| 干涉 | `PowerSplitter1x2`、`DirectionalCoupler2x2`、单/双输入 MZI | 已完成 |
+| 干涉 | `PowerSplitter1x2`、`DirectionalCoupler2x2`、`DifferentialDualPortMZM`、`FourPortMZM` | 已完成 |
 | 非理想 | `OpticalAttenuator`、`AdditiveComplexGaussianNoise` | 已完成 |
-| 功能块 | 支持分支/汇合的图式 `OpticalChain` | 已完成 |
-| 光计算 | Xu 等 Nature 2021 路线的实值 WDM 光卷积 | 已完成 |
+| 功能块 | 器件端口连接与自动发现拓扑的 `OpticalChain.from_device_graph` | 已完成 |
+| 光计算 | Xu 等 Nature 2021 路线、由真实器件库组成的实值 WDM 光卷积 | 已完成 |
 | 长序列 | `OverlapSaveFIR`，可训练复 FIR 的线性卷积 | 已完成 |
 | 示例 | MZM 偏置的端到端自动微分训练 | 已完成 |
 | 光源 | `OpticalFrequencyComb`，离散谱线、每线功率和相位 | 已完成 |
@@ -33,7 +33,7 @@
 | 光源 | `PracticalElectroOpticComb`，RF 一阶带宽与 Wiener 相位噪声 | 已完成 |
 | 放大 | `GainControlledEDFA`，商用增益 dB 控制、饱和与 ASE | 已完成 |
 | 放大 | `SaturatedNoisyEDFA`，小信号增益、ASE、饱和和噪声系数 | 已完成 |
-| 兼容层 | `FourInputMZI`、电流映射 EDFA、`ComplexConv1d` | 仅保留 v0.7 兼容，不作为物理推荐路径 |
+| 兼容层 | 电流映射 EDFA、`ComplexConv1d` | 仅保留兼容，不作为物理推荐路径 |
 
 详细的物理约定和公式自检记录见 `docs/OptoSimLab_使用说明.pdf`。
 
@@ -52,7 +52,7 @@
 
 ### 1.2 Nature 2021 实值光卷积（推荐路径）
 
-对应 Xingyuan Xu 等人的微梳卷积架构：等间隔光梳 → WaveShaper 把权重映射到每线功率 → 强度调制器把同一输入广播到各梳齿 → 色散产生逐通道递增延时 → 低带宽光电探测器对各通道功率求和。
+对应 Xingyuan Xu 等人的微梳卷积架构：等间隔光梳 → `WaveShaper` 把权重映射到每线功率 → `IdealMZM`/实际或实测 MZM 把同一输入广播到各梳齿 → `LinearDispersiveFiber` 产生逐通道递增延时 → `PhotodetectorSum` 对各通道功率求和。`PhotonicRealConvolution` 注册并实际执行的就是这些器件对象，不再包含重复的权重、调制或延时数学替身。
 
 ```python
 import torch
@@ -80,8 +80,8 @@ assert torch.allclose(p_detector_w, 1e-3 * y, atol=1e-9)
 ```python
 import torch
 from optosimlab import (
-    GainControlledEDFA, MeasuredMZM, OpticalChain,
-    PowerSplitter1x2, SimulationGrid,
+    DirectionalCoupler2x2, GainControlledEDFA, MeasuredMZM,
+    OpticalAttenuator, OpticalChain, PowerSplitter1x2, SimulationGrid,
 )
 
 # 商用品常见的增益控制接口：gain_db，而不是泵浦电流
@@ -93,17 +93,20 @@ edfa = GainControlledEDFA(
 # CSV 列名默认为 voltage_v,power_transmission；可选 phase_rad
 mzm = MeasuredMZM.from_csv("mzm_curve.csv", phase_column="phase_rad")
 
-# 图式链路允许一个输出扇出到并行路径，也允许多输入汇合
-graph = OpticalChain.from_graph(
-    [("split", PowerSplitter1x2(0.5), "input", ("upper", "lower"))],
-    outputs=("upper", "lower"),
-)
-ports = graph(torch.ones(1024, dtype=torch.complex64))
+# 直接在器件上声明端口连接，Chain 自动发现拓扑和执行顺序
+splitter = PowerSplitter1x2(0.5).named("splitter")
+upper = OpticalAttenuator(3.0).named("upper")
+lower = OpticalAttenuator(6.0).named("lower")
+combiner = DirectionalCoupler2x2(0.5).named("combiner")
+splitter.connect_outputs(upper, lower)
+combiner.connect_inputs(upper, lower)
+graph = OpticalChain.from_device_graph(splitter, outputs=[(combiner, "output0")])
+output = graph(torch.ones(1024, dtype=torch.complex64))
 ```
 
-实测曲线在标定电压范围内分段线性插值，范围外钳位到端点；`power_transmission` 必须在 `[0,1]`。2×2 定向耦合器采用交叉端口带 `j` 相位的幺正矩阵，单输入和双输入单输出 MZI 均由两只该耦合器与差分相移组成。
+实测曲线在标定电压范围内分段线性插值，范围外钳位到端点；`power_transmission` 必须在 `[0,1]`。2×2 定向耦合器采用交叉端口带 `j` 相位的幺正矩阵。理想、实际、差分双输出和四光端口 MZM 全部集中在 `devices/mzm.py`；双输出和四端口结构由分束器/耦合器与差分相移构成，实际 MZM 在共享理想干涉器上加入插损和有限消光比。
 
-### 1.4 v0.8 专项验证
+### 1.4 v0.9 专项验证
 
 ```powershell
 cd F:\OptoSimLab
@@ -131,7 +134,7 @@ python -c "import torch, numpy; print('torch =', torch.__version__); print('nump
 python -m pytest
 ```
 
-成功标准：最后一条命令显示 `82 passed` 或更多，且没有失败项目；没有 CUDA 时会额外显示 1 项明确跳过的 GPU 一致性测试。
+成功标准：最后一条命令显示 `91 passed` 或更多，且没有失败项目；没有 CUDA 时会额外显示 1 项明确跳过的 GPU 一致性测试。
 
 如果 PowerShell 不允许激活虚拟环境，只对当前窗口执行：
 

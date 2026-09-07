@@ -9,10 +9,10 @@ from torch import Tensor, nn
 
 from ..config import C_LIGHT, H_PLANCK, SimulationGrid
 from ..units import db_to_power_ratio, dbm_to_w
-from .base import nonnegative_parameter, require_complex_field
+from .base import GraphDevice, nonnegative_parameter, require_complex_field
 
 
-class GainControlledEDFA(nn.Module):
+class GainControlledEDFA(GraphDevice):
     """Commercial-style gain-controlled EDFA.
 
     The user-facing control is net peak power gain in dB, matching a
@@ -132,7 +132,7 @@ class GainControlledEDFA(nn.Module):
         return signal + torch.fft.ifft(spectral_noise, dim=-1)
 
 
-class SmallSignalEDFA(nn.Module):
+class SmallSignalEDFA(GraphDevice):
     """Frequency-dependent, deterministic small-signal EDFA.
 
     The model deliberately covers the linear operating regime only.  Its peak

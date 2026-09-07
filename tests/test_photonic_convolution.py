@@ -1,7 +1,15 @@
 import torch
 import pytest
 
-from optosimlab import DifferentialPhotonicConvolution, PhotonicRealConvolution
+from optosimlab import (
+    DifferentialPhotonicConvolution,
+    IdealMZM,
+    LinearDispersiveFiber,
+    PracticalMZM,
+    PhotodetectorSum,
+    PhotonicRealConvolution,
+    WaveShaper,
+)
 
 
 def causal_convolution(samples: torch.Tensor, weights: torch.Tensor, delay: int = 1) -> torch.Tensor:
@@ -19,6 +27,11 @@ def test_nature_route_matches_pointwise_real_convolution_and_physical_power() ->
     layer = PhotonicRealConvolution(weights, sample_rate_hz=100e9, line_spacing_hz=10e9, line_power_w=2e-3)
     expected = causal_convolution(samples, weights)
     assert layer.optical_chain._is_graph
+    assert isinstance(layer.waveshaper, WaveShaper)
+    assert isinstance(layer.modulator, IdealMZM)
+    assert isinstance(layer.fiber, LinearDispersiveFiber)
+    assert isinstance(layer.detector, PhotodetectorSum)
+    assert tuple(layer.optical_chain.graph_devices) == ("waveshaper", "modulator", "fiber", "photodetector")
     assert torch.allclose(layer(samples), expected, atol=2e-6, rtol=2e-6)
     assert torch.allclose(layer.detected_power_w(samples), 2e-3 * expected, atol=2e-9, rtol=2e-6)
 
@@ -31,7 +44,7 @@ def test_photonic_convolution_supports_batches_delay_and_gradients() -> None:
     assert torch.allclose(output, causal_convolution(samples, weights, 2), atol=2e-6)
     output.sum().backward()
     assert samples.grad is not None and torch.all(torch.isfinite(samples.grad))
-    assert layer.optical_chain.graph_devices["weights"].weight_logits.grad is not None
+    assert layer.waveshaper.attenuation_db.grad is not None
 
 
 def test_differential_branches_match_signed_real_convolution() -> None:
@@ -39,6 +52,26 @@ def test_differential_branches_match_signed_real_convolution() -> None:
     samples = torch.tensor([0.2, 0.5, 0.7, 0.3, 0.9])
     layer = DifferentialPhotonicConvolution(weights, sample_rate_hz=100e9, line_spacing_hz=10e9, trainable=False)
     assert torch.allclose(layer(samples), causal_convolution(samples, weights), atol=3e-6)
+
+
+def test_practical_mzm_path_calibrates_loss_and_extinction_floor() -> None:
+    weights = torch.tensor([0.25, 0.75])
+    samples = torch.tensor([0.0, 0.3, 1.0, 0.2])
+    modulator = PracticalMZM(
+        v_pi=2.0,
+        insertion_loss_db=3.0,
+        extinction_ratio_db=20.0,
+        trainable=False,
+    )
+    layer = PhotonicRealConvolution(weights, modulator=modulator, trainable=False)
+    expected = causal_convolution(samples, weights)
+    assert torch.allclose(layer(samples), expected, atol=3e-6, rtol=3e-6)
+
+    minimum, maximum = modulator.power_transmission_bounds(samples)
+    physical_expected = layer.line_power_w * (
+        minimum * weights.sum() + (maximum - minimum) * expected
+    )
+    assert torch.allclose(layer.detected_power_w(samples), physical_expected, atol=2e-9, rtol=3e-6)
 
 
 def test_single_branch_rejects_negative_or_integer_samples() -> None:

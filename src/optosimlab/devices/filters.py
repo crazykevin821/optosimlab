@@ -6,10 +6,10 @@ import torch
 from torch import Tensor, nn
 
 from ..config import SimulationGrid
-from .base import nonnegative_parameter, require_complex_field
+from .base import GraphDevice, nonnegative_parameter, require_complex_field
 
 
-class FrequencyDomainLowPass(nn.Module):
+class FrequencyDomainLowPass(GraphDevice):
     """Zero-phase Butterworth-magnitude low-pass filter.
 
     ``cutoff_hz`` is the -3 dB *power* cutoff. The field transfer is

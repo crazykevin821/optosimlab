@@ -24,3 +24,17 @@ def test_measured_mzm_loads_named_csv_and_curve_has_gradient(tmp_path) -> None:
 def test_measured_mzm_rejects_nonmonotonic_voltage_points() -> None:
     with pytest.raises(ValueError, match="strictly increasing"):
         MeasuredMZM(torch.tensor([0.0, 1.0, 0.5]), torch.tensor([0.1, 0.5, 0.9]))
+
+
+def test_measured_mzm_inverse_round_trips_monotonic_curve() -> None:
+    mzm = MeasuredMZM(torch.tensor([-1.0, 0.0, 1.0]), torch.tensor([0.0, 0.25, 1.0]))
+    requested = torch.tensor([0.125, 0.625])
+    voltage = mzm.voltage_for_power_transmission(requested)
+    field = mzm(torch.ones(2, dtype=torch.complex64), voltage)
+    assert torch.allclose(field.abs().square(), requested, atol=1e-6)
+
+
+def test_measured_mzm_inverse_rejects_nonmonotonic_transmission() -> None:
+    mzm = MeasuredMZM(torch.tensor([-1.0, 0.0, 1.0]), torch.tensor([0.0, 1.0, 0.5]))
+    with pytest.raises(ValueError, match="monotonic"):
+        mzm.voltage_for_power_transmission(torch.tensor([0.5]))

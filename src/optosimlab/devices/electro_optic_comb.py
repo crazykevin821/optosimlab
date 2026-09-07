@@ -8,10 +8,10 @@ import torch
 from torch import Tensor, nn
 
 from ..config import SimulationGrid
-from .base import nonnegative_parameter, require_complex_field
+from .base import GraphDevice, nonnegative_parameter, require_complex_field
 
 
-class ElectroOpticComb(nn.Module):
+class ElectroOpticComb(GraphDevice):
     """Cascade ideal phase modulators driven by phase-coherent RF tones.
 
     Each stage applies the lossless phase-modulation transfer function

@@ -26,3 +26,18 @@ def test_uniform_phase_is_unit_magnitude_phase_rotation() -> None:
     output = shaper(torch.ones(64, dtype=torch.complex64))
     expected = torch.full((64,), 1j, dtype=torch.complex64)
     assert torch.allclose(output, expected, atol=2e-6)
+
+
+def test_waveshaper_maps_wdm_controls_to_per_channel_power_weights() -> None:
+    frequencies = torch.tensor([-10.0, 0.0, 10.0])
+    weights = torch.tensor([0.2, 0.5, 0.8])
+    shaper = WaveShaper(
+        SimulationGrid(100.0),
+        control_frequencies_hz=frequencies,
+        attenuation_db=-10.0 * torch.log10(weights),
+    )
+    channels = torch.ones(3, 8, dtype=torch.complex64)
+    output = shaper(channels, frequencies)
+    assert torch.allclose(output.abs().square().mean(dim=-1), weights, atol=2e-6)
+    output.abs().square().sum().backward()
+    assert shaper.attenuation_db.grad is not None

@@ -37,3 +37,19 @@ def test_fiber_phase_matches_beta2_transfer_formula() -> None:
     omega = 2.0 * math.pi * 8.0
     expected = complex(math.cos(0.5 * beta2 * omega**2 * length), math.sin(0.5 * beta2 * omega**2 * length))
     assert torch.allclose(response[8], torch.tensor(expected, dtype=torch.complex128), atol=1e-12)
+
+
+def test_wdm_dispersion_gives_progressive_positive_delay_without_mixing_channels() -> None:
+    sample_rate = 8.0
+    spacing = 1.0
+    beta2 = -1.0
+    delay_s = 1.0 / sample_rate
+    length = delay_s / (-beta2 * 2.0 * math.pi * spacing)
+    fiber = LinearDispersiveFiber(SimulationGrid(sample_rate), length_m=length, beta2_s2_per_m=beta2)
+    channels = torch.zeros(2, 8, dtype=torch.complex64)
+    channels[:, 0] = 1.0
+    output = fiber(channels, torch.tensor([0.0, spacing]))
+    assert output[0].abs().argmax().item() == 0
+    assert output[1].abs().argmax().item() == 1
+    assert torch.allclose(output.abs().square().sum(dim=-1), torch.ones(2), atol=1e-6)
+    assert torch.allclose(fiber.adjacent_channel_delay_s(spacing), torch.tensor(delay_s), atol=1e-7)

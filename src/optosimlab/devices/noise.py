@@ -5,10 +5,10 @@ from __future__ import annotations
 import torch
 from torch import Tensor, nn
 
-from .base import nonnegative_parameter, require_complex_field
+from .base import GraphDevice, nonnegative_parameter, require_complex_field
 
 
-class OpticalAttenuator(nn.Module):
+class OpticalAttenuator(GraphDevice):
     """Power attenuator with a non-negative attenuation in dB."""
 
     def __init__(self, attenuation_db: float = 0.0, *, trainable: bool = False) -> None:
@@ -24,7 +24,7 @@ class OpticalAttenuator(nn.Module):
         return field * torch.pow(ten, -loss_db / 20.0)
 
 
-class AdditiveComplexGaussianNoise(nn.Module):
+class AdditiveComplexGaussianNoise(GraphDevice):
     """Add circular complex Gaussian field noise with RMS field value ``sigma``.
 
     Real and imaginary quadratures each have variance ``sigma**2 / 2``. Thus

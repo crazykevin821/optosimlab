@@ -8,10 +8,10 @@ import torch
 from torch import Tensor, nn
 
 from ..config import C_LIGHT, SimulationGrid
-from .base import nonnegative_parameter, require_complex_field
+from .base import GraphDevice, nonnegative_parameter, require_complex_field
 
 
-class LinearDispersiveFiber(nn.Module):
+class LinearDispersiveFiber(GraphDevice):
     """Frequency-domain fibre with power attenuation and second-order dispersion.
 
     In this package, forward FFT uses ``exp(-j 2 pi f t)`` and inverse FFT
@@ -72,7 +72,59 @@ class LinearDispersiveFiber(nn.Module):
         phase = 0.5 * beta2 * omega.square() * length
         return torch.exp(torch.complex(log_amplitude.expand_as(phase), phase))
 
-    def forward(self, field: Tensor) -> Tensor:
+    def wdm_transfer_function(
+        self,
+        samples: int,
+        carrier_offsets_hz: Tensor,
+        *,
+        device: torch.device,
+        dtype: torch.dtype,
+        reference_offset_hz: Tensor | float | None = None,
+    ) -> Tensor:
+        """Return narrowband WDM transfer with wavelength-dependent delay.
+
+        Expanding the fibre phase around carrier offset f_k gives the baseband
+        linear term beta2*L*(2*pi*f_k)*(2*pi*f).  A common group delay is
+        removed by referencing the first (or supplied) carrier.  The resulting
+        adjacent-channel delay is -beta2*L*2*pi*Delta_f under this package's
+        FFT sign convention.  This method intentionally omits the common
+        intra-channel quadratic term so it models the progressive-delay regime
+        used by transversal photonic processors.
+        """
+        if samples <= 0:
+            raise ValueError("samples must be positive")
+        if not isinstance(carrier_offsets_hz, Tensor) or carrier_offsets_hz.ndim != 1:
+            raise ValueError("carrier_offsets_hz must be a one-dimensional tensor")
+        offsets = carrier_offsets_hz.to(device=device, dtype=dtype)
+        reference = offsets[0] if reference_offset_hz is None else torch.as_tensor(reference_offset_hz, device=device, dtype=dtype)
+        relative_carrier_omega = 2.0 * torch.pi * (offsets - reference)
+        baseband_omega = 2.0 * torch.pi * self.grid.frequencies_hz(samples, device=device).to(dtype=dtype)
+        length = nonnegative_parameter(self.length_m, "length_m").to(device=device, dtype=dtype)
+        attenuation_db = nonnegative_parameter(self.attenuation_db_per_km, "attenuation_db_per_km").to(
+            device=device, dtype=dtype
+        )
+        beta2 = self.beta2_s2_per_m.to(device=device, dtype=dtype)
+        alpha_power_np_per_m = attenuation_db * (math.log(10.0) / 10.0) / 1000.0
+        log_amplitude = -0.5 * alpha_power_np_per_m * length
+        phase = beta2 * length * relative_carrier_omega.unsqueeze(-1) * baseband_omega.unsqueeze(0)
+        return torch.exp(torch.complex(log_amplitude.expand_as(phase), phase))
+
+    def adjacent_channel_delay_s(self, line_spacing_hz: float) -> Tensor:
+        """Return group-delay increment between increasing-frequency channels."""
+        if line_spacing_hz <= 0:
+            raise ValueError("line_spacing_hz must be positive")
+        return -self.beta2_s2_per_m * self.length_m * (2.0 * math.pi * line_spacing_hz)
+
+    def forward(self, field: Tensor, carrier_offsets_hz: Tensor | None = None) -> Tensor:
         require_complex_field(field)
+        if carrier_offsets_hz is not None:
+            if field.ndim < 2 or field.shape[-2] != carrier_offsets_hz.numel():
+                raise ValueError("WDM field must have shape (..., channels, samples) matching carrier_offsets_hz")
+            response = self.wdm_transfer_function(
+                field.shape[-1], carrier_offsets_hz, device=field.device, dtype=field.real.dtype
+            )
+            while response.ndim < field.ndim:
+                response = response.unsqueeze(0)
+            return torch.fft.ifft(torch.fft.fft(field, dim=-1) * response, dim=-1)
         response = self.transfer_function(field.shape[-1], device=field.device, dtype=field.real.dtype)
         return torch.fft.ifft(torch.fft.fft(field, dim=-1) * response, dim=-1)

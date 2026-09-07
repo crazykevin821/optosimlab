@@ -1,5 +1,15 @@
 # Changelog
 
+## 0.9.0 - 2026-09-07
+
+- Rebuilt `PhotonicRealConvolution` from the actual `WaveShaper`, MZM, `LinearDispersiveFiber`, and square-law photodetector device models; removed the duplicate elementary-math stand-ins.
+- Unified splitter, directional coupler, ideal/practical/measured MZM, differential dual-port MZM, and four-optical-port MZM in `devices/mzm.py`; removed the overlapping `mzi.py` implementation.
+- Added calibrated MZM inverse transfer functions so normalized input power is converted to physical drive voltage before modulation.
+- Added explicit WDM control-frequency response to `WaveShaper` and carrier-dependent group delay to `LinearDispersiveFiber`.
+- Added `GraphDevice` port wiring and `OpticalChain.from_device_graph()` for topology discovery, fan-out, merge, optional open ports, topological sorting, and cycle rejection.
+- Added `PhotodetectorSum` and `BalancedPhotodetector` hardware definitions.
+- Expanded physical, mathematical, graph, gradient, and regression verification to 91 passing tests plus one conditional CUDA test.
+
 ## 0.8.0 - 2026-09-06
 
 - Defined SI-based optical field, power, voltage, time, frequency and dB conventions.

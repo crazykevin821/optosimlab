@@ -8,10 +8,11 @@ import torch
 from torch import Tensor, nn
 
 from ..config import SimulationGrid
-from .base import nonnegative_parameter
+from .base import GraphDevice, nonnegative_parameter
 
 
-class OpticalFrequencyComb(nn.Module):
+class OpticalFrequencyComb(GraphDevice):
+    graph_input_ports = ("samples",)
     """Generate a carrier-centred, discrete optical frequency comb.
 
     The source contains lines on integer multiples of line_spacing_hz.  Odd
@@ -90,6 +91,24 @@ class OpticalFrequencyComb(nn.Module):
         signed = torch.where(indices <= samples // 2, indices, indices - samples)
         return signed.to(torch.float64) * (self.grid.sample_rate_hz / samples)
 
+    def nominal_line_offsets_hz(
+        self,
+        *,
+        device: torch.device | None = None,
+        dtype: torch.dtype = torch.float64,
+    ) -> Tensor:
+        """Return configured carrier offsets without finite-record bin checks."""
+        offsets = torch.arange(
+            -(self.line_count // 2),
+            self.line_count - self.line_count // 2,
+            device=device,
+            dtype=dtype,
+        )
+        offsets = offsets * self.line_spacing_hz
+        if torch.any(offsets.abs() > self.grid.sample_rate_hz / 2.0):
+            raise ValueError("comb lines exceed the representable positive/negative frequency range")
+        return offsets
+
     def spectrum(self, samples: int, *, device: torch.device | None = None, real_dtype: torch.dtype | None = None) -> Tensor:
         """Return the unnormalised FFT spectrum of the comb waveform."""
         indices = self.line_bin_indices(samples)
@@ -134,3 +153,26 @@ class OpticalFrequencyComb(nn.Module):
         time = torch.arange(samples, device=device, dtype=dtype) / self.grid.sample_rate_hz
         angles = 2.0 * torch.pi * offsets.unsqueeze(-1) * time + phases.unsqueeze(-1)
         return torch.sqrt(powers).unsqueeze(-1) * torch.polar(torch.ones_like(angles), angles)
+
+    def channel_envelopes(
+        self,
+        samples: int,
+        *,
+        device: torch.device | None = None,
+        real_dtype: torch.dtype | None = None,
+    ) -> Tensor:
+        """Return one baseband envelope per comb carrier.
+
+        Carrier frequencies are supplied separately by
+        nominal_line_offsets_hz().  This representation is intended for WDM
+        devices that explicitly use each channel's carrier offset.
+        """
+        if samples <= 0:
+            raise ValueError("samples must be positive")
+        device = device or self.line_powers.device
+        dtype = real_dtype or self.line_powers.dtype
+        self.nominal_line_offsets_hz(device=device, dtype=dtype)
+        powers = nonnegative_parameter(self.line_powers, "line_powers").to(device=device, dtype=dtype)
+        phases = self.line_phases_rad.to(device=device, dtype=dtype)
+        coefficients = torch.polar(torch.sqrt(powers), phases)
+        return coefficients.unsqueeze(-1).expand(self.line_count, samples)

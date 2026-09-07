@@ -2,7 +2,7 @@ import math
 
 import torch
 
-from optosimlab.devices.mzm import MachZehnderModulator
+from optosimlab.devices.mzm import MachZehnderModulator, PracticalMZM
 
 
 def complex_ones(samples: int = 32) -> torch.Tensor:
@@ -30,8 +30,23 @@ def test_mzm_loss_and_extinction_are_power_correct() -> None:
 def test_mzm_parameters_are_registered_and_differentiable() -> None:
     mzm = MachZehnderModulator(v_pi=1.0, bias_voltage=0.2)
     names = set(dict(mzm.named_parameters()))
-    assert names == {"v_pi", "bias_voltage", "insertion_loss_db", "extinction_ratio_db"}
+    assert names == {
+        "ideal.interferometer.v_pi",
+        "ideal.interferometer.bias_voltage",
+        "ideal.interferometer.splitter.splitting_logit",
+        "ideal.interferometer.splitter.insertion_loss_db",
+        "ideal.interferometer.output_coupler.splitting_logit",
+        "ideal.interferometer.output_coupler.insertion_loss_db",
+        "ideal.interferometer.insertion_loss_db",
+        "insertion_loss_db",
+        "extinction_ratio_db",
+    }
     output_power = mzm(complex_ones(), torch.zeros(32)).abs().square().mean()
     output_power.backward()
     assert mzm.bias_voltage.grad is not None
     assert not math.isclose(mzm.bias_voltage.grad.item(), 0.0, abs_tol=1e-7)
+
+
+def test_practical_mzm_is_explicit_public_name() -> None:
+    mzm = PracticalMZM(v_pi=1.0, insertion_loss_db=1.0, extinction_ratio_db=25.0)
+    assert isinstance(mzm, MachZehnderModulator)
