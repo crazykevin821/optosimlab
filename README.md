@@ -9,7 +9,7 @@
 当前开发环境和基础模块已经验证可用：
 
 ```text
-91 passed, 1 skipped (CUDA unavailable)
+92 passed, 1 skipped (CUDA unavailable)
 ```
 
 已完成：
@@ -75,6 +75,8 @@ assert torch.allclose(p_detector_w, 1e-3 * y, atol=1e-9)
 
 本模块的逐点定义是 `y[n] = Σ_k w[k] x[n-kD]`，记录开始前补零，不使用循环卷积。单个无源 WaveShaper 支路只能实现同号非负权重；有符号权重使用 `DifferentialPhotonicConvolution` 的正、负双探测支路相减。`ComplexConv1d` 只保留作数学神经网络兼容层，不再代表该物理系统。
 
+若传入带非零衰减的自定义色散光纤，`detected_power_w()` 保留真实光纤功率损耗；校准后的 `forward()` 同时在泄漏基线和调制摆幅中计入 `fiber.power_transmission()`，因此仍返回同一个无量纲因果卷积。v0.9.1 增加了“有损光纤 + 有限消光比 MZM”的联合解析回归测试，防止物理功率与数值归一化再次混用。
+
 ### 1.3 并行光路、商用 EDFA 和实测调制器
 
 ```python
@@ -106,7 +108,7 @@ output = graph(torch.ones(1024, dtype=torch.complex64))
 
 实测曲线在标定电压范围内分段线性插值，范围外钳位到端点；`power_transmission` 必须在 `[0,1]`。2×2 定向耦合器采用交叉端口带 `j` 相位的幺正矩阵。理想、实际、差分双输出和四光端口 MZM 全部集中在 `devices/mzm.py`；双输出和四端口结构由分束器/耦合器与差分相移构成，实际 MZM 在共享理想干涉器上加入插损和有限消光比。
 
-### 1.4 v0.9 专项验证
+### 1.4 v0.9.1 专项验证
 
 ```powershell
 cd F:\OptoSimLab
@@ -134,7 +136,7 @@ python -c "import torch, numpy; print('torch =', torch.__version__); print('nump
 python -m pytest
 ```
 
-成功标准：最后一条命令显示 `91 passed` 或更多，且没有失败项目；没有 CUDA 时会额外显示 1 项明确跳过的 GPU 一致性测试。
+成功标准：最后一条命令显示 `92 passed` 或更多，且没有失败项目；没有 CUDA 时会额外显示 1 项明确跳过的 GPU 一致性测试。
 
 如果 PowerShell 不允许激活虚拟环境，只对当前窗口执行：
 
@@ -406,20 +408,20 @@ python -m pytest tests\test_overlap_save.py -q
 3. 建立小型分类或回归任务，验证端到端反向传播。
 4. 使用器件测量数据替换理想传输曲线，比较仿真与实验。
 
-## 8. 全部完成的验收标准
+## 14. 完整第一版的进一步验收标准
 
 只有同时满足以下条件，才把平台标为“完整的第一版”：
 
 - [x] README 计划中的电光梳和 EDFA 模块全部完成。
 - [ ] 每个器件均有公式、单位、输入输出契约和失败用例。
 - [ ] 每个可训练参数都是 `nn.Parameter`，并通过梯度测试。
-- [ ] CPU 上全部测试通过；如使用 GPU，CPU/GPU 结果在约定误差内一致。
+- [x] CPU 上全部测试通过；如使用 GPU，CPU/GPU 结果在约定误差内一致。
 - [ ] 长序列的频域处理不再依赖未说明的循环卷积。
-- [ ] 至少有一个端到端光计算或光神经网络训练示例。
-- [ ] 至少有一个带非理想器件参数的链路示例。
-- [ ] `docs/OptoSimLab_使用说明.pdf` 与真实实现、测试结果一致。
+- [x] 至少有一个端到端光计算或光神经网络训练示例。
+- [x] 至少有一个带非理想器件参数的链路示例。
+- [x] `docs/OptoSimLab_使用说明.pdf` 与真实实现、测试结果一致。
 
-## 9. 工程结构
+## 15. 工程结构
 
 ```text
 F:\OptoSimLab

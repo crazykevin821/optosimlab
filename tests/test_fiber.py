@@ -26,6 +26,7 @@ def test_fiber_power_loss_uses_db_per_km_correctly() -> None:
     fiber = LinearDispersiveFiber(SimulationGrid(100e9), length_m=1_000.0, attenuation_db_per_km=10.0)
     output_power = fiber(field).abs().square().mean()
     assert torch.allclose(output_power, torch.tensor(0.1), rtol=1e-5, atol=1e-6)
+    assert torch.allclose(fiber.power_transmission(field.real), torch.tensor(0.1), rtol=1e-6)
 
 
 def test_fiber_phase_matches_beta2_transfer_formula() -> None:

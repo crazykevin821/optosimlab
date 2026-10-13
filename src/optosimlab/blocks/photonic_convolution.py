@@ -179,11 +179,15 @@ class PhotonicRealConvolution(nn.Module):
         """Return calibrated zero-state causal convolution."""
         detected = self.detected_power_w(samples)
         minimum, maximum = self.modulator.power_transmission_bounds(samples)
+        fiber_transmission = self.fiber.power_transmission(samples)
         weighted_line_power = self.line_power_w * self.power_weights.sum().to(
             device=samples.device, dtype=samples.dtype
         )
-        baseline = minimum * weighted_line_power
-        return (detected - baseline) / (self.line_power_w * (maximum - minimum))
+        baseline = fiber_transmission * minimum * weighted_line_power
+        calibration = self.line_power_w * fiber_transmission * (maximum - minimum)
+        if torch.any(calibration.detach() <= torch.finfo(samples.dtype).tiny):
+            raise ValueError("combined line power, fibre transmission and MZM swing are too small to calibrate")
+        return (detected - baseline) / calibration
 
 
 class DifferentialPhotonicConvolution(nn.Module):

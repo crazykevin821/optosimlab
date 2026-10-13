@@ -115,6 +115,24 @@ class LinearDispersiveFiber(GraphDevice):
             raise ValueError("line_spacing_hz must be positive")
         return -self.beta2_s2_per_m * self.length_m * (2.0 * math.pi * line_spacing_hz)
 
+    def power_transmission(self, reference: Tensor) -> Tensor:
+        """Return the fibre's wavelength-independent power transmission.
+
+        ``attenuation_db_per_km`` is a power loss and ``length_m`` is converted
+        to kilometres, so the result is ``10**(-alpha_db_per_km*L_km/10)``.
+        The scalar retains autograd connections to trainable fibre parameters.
+        """
+        if not isinstance(reference, Tensor) or torch.is_complex(reference) or not reference.is_floating_point():
+            raise TypeError("reference must be a real floating-point torch.Tensor")
+        length = nonnegative_parameter(self.length_m, "length_m").to(
+            device=reference.device, dtype=reference.dtype
+        )
+        attenuation = nonnegative_parameter(
+            self.attenuation_db_per_km, "attenuation_db_per_km"
+        ).to(device=reference.device, dtype=reference.dtype)
+        ten = torch.tensor(10.0, device=reference.device, dtype=reference.dtype)
+        return torch.pow(ten, -attenuation * (length / 1000.0) / 10.0)
+
     def forward(self, field: Tensor, carrier_offsets_hz: Tensor | None = None) -> Tensor:
         require_complex_field(field)
         if carrier_offsets_hz is not None:

@@ -1,3 +1,5 @@
+import math
+
 import torch
 import pytest
 
@@ -8,6 +10,7 @@ from optosimlab import (
     PracticalMZM,
     PhotodetectorSum,
     PhotonicRealConvolution,
+    SimulationGrid,
     WaveShaper,
 )
 
@@ -69,6 +72,46 @@ def test_practical_mzm_path_calibrates_loss_and_extinction_floor() -> None:
 
     minimum, maximum = modulator.power_transmission_bounds(samples)
     physical_expected = layer.line_power_w * (
+        minimum * weights.sum() + (maximum - minimum) * expected
+    )
+    assert torch.allclose(layer.detected_power_w(samples), physical_expected, atol=2e-9, rtol=3e-6)
+
+
+def test_lossy_fiber_is_in_physical_power_but_calibrates_out_of_convolution() -> None:
+    sample_rate_hz = 100e9
+    line_spacing_hz = 10e9
+    beta2 = LinearDispersiveFiber.beta2_from_dispersion(17.0, 1550e-9)
+    delay_s = 1.0 / sample_rate_hz
+    length_m = delay_s / (-beta2 * 2.0 * math.pi * line_spacing_hz)
+    fiber = LinearDispersiveFiber(
+        SimulationGrid(sample_rate_hz),
+        length_m=length_m,
+        attenuation_db_per_km=0.2,
+        beta2_s2_per_m=beta2,
+        trainable=False,
+    )
+    weights = torch.tensor([0.25, 0.75])
+    samples = torch.tensor([0.0, 0.3, 1.0, 0.2])
+    modulator = PracticalMZM(
+        v_pi=2.0,
+        insertion_loss_db=3.0,
+        extinction_ratio_db=20.0,
+        trainable=False,
+    )
+    layer = PhotonicRealConvolution(
+        weights,
+        sample_rate_hz=sample_rate_hz,
+        line_spacing_hz=line_spacing_hz,
+        modulator=modulator,
+        fiber=fiber,
+        trainable=False,
+    )
+    expected = causal_convolution(samples, weights)
+    assert torch.allclose(layer(samples), expected, atol=3e-6, rtol=3e-6)
+
+    minimum, maximum = modulator.power_transmission_bounds(samples)
+    fiber_transmission = fiber.power_transmission(samples)
+    physical_expected = layer.line_power_w * fiber_transmission * (
         minimum * weights.sum() + (maximum - minimum) * expected
     )
     assert torch.allclose(layer.detected_power_w(samples), physical_expected, atol=2e-9, rtol=3e-6)

@@ -1,5 +1,13 @@
 # Changelog
 
+## 0.9.1 - 2026-10-13
+
+- Fixed the calibrated WDM real-convolution output for user-supplied dispersive fibre with nonzero attenuation.
+- Added `LinearDispersiveFiber.power_transmission()` as the single differentiable definition of fibre power loss.
+- Corrected the convolution leakage-floor subtraction and modulation-swing normalization to include common fibre transmission.
+- Added an analytic regression test combining nonzero fibre loss with a finite-extinction practical MZM; the physical detector power and normalized convolution are both checked.
+- Refreshed the LaTeX manual, formula self-check record, package instructions, and release version.
+
 ## 0.9.0 - 2026-09-07
 
 - Rebuilt `PhotonicRealConvolution` from the actual `WaveShaper`, MZM, `LinearDispersiveFiber`, and square-law photodetector device models; removed the duplicate elementary-math stand-ins.

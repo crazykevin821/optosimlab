@@ -13,6 +13,13 @@ htmlcov/
 tmp/
 output/
 
+# LaTeX build intermediates (the reviewed PDF is copied to docs/)
+docs/source/*.aux
+docs/source/*.log
+docs/source/*.out
+docs/source/*.pdf
+docs/source/*.toc
+
 # Editor and operating-system files
 .vscode/
 .idea/
