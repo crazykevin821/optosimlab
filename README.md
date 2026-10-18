@@ -9,7 +9,7 @@
 当前开发环境和基础模块已经验证可用：
 
 ```text
-92 passed, 1 skipped (CUDA unavailable)
+105 passed, 1 skipped (CUDA unavailable)
 ```
 
 已完成：
@@ -26,6 +26,9 @@
 | 非理想 | `OpticalAttenuator`、`AdditiveComplexGaussianNoise` | 已完成 |
 | 功能块 | 器件端口连接与自动发现拓扑的 `OpticalChain.from_device_graph` | 已完成 |
 | 光计算 | Xu 等 Nature 2021 路线、由真实器件库组成的实值 WDM 光卷积 | 已完成 |
+| 光计算 | 基于 MZI 内/外相移与相干求和的复值一维卷积 | 已完成 |
+| 大数据 | 保留因果历史和梯度的长序列分块执行、批量张量映射 | 已完成 |
+| 训练 | MNIST 理想/非理想光卷积分类、电子或强度 MZI 激活 | 已完成 |
 | 长序列 | `OverlapSaveFIR`，可训练复 FIR 的线性卷积 | 已完成 |
 | 示例 | MZM 偏置的端到端自动微分训练 | 已完成 |
 | 光源 | `OpticalFrequencyComb`，离散谱线、每线功率和相位 | 已完成 |
@@ -35,7 +38,7 @@
 | 放大 | `SaturatedNoisyEDFA`，小信号增益、ASE、饱和和噪声系数 | 已完成 |
 | 兼容层 | 电流映射 EDFA、`ComplexConv1d` | 仅保留兼容，不作为物理推荐路径 |
 
-详细的物理约定和公式自检记录见 `docs/OptoSimLab_使用说明.pdf`。
+详细的物理约定和公式自检记录见 `docs/OptoSimLab_使用说明.pdf`；所有公开模型的参数和最小示例见 [`docs/API_中文说明.md`](docs/API_中文说明.md)。
 
 ### 1.1 默认单位（所有公开接口）
 
@@ -108,10 +111,10 @@ output = graph(torch.ones(1024, dtype=torch.complex64))
 
 实测曲线在标定电压范围内分段线性插值，范围外钳位到端点；`power_transmission` 必须在 `[0,1]`。2×2 定向耦合器采用交叉端口带 `j` 相位的幺正矩阵。理想、实际、差分双输出和四光端口 MZM 全部集中在 `devices/mzm.py`；双输出和四端口结构由分束器/耦合器与差分相移构成，实际 MZM 在共享理想干涉器上加入插损和有限消光比。
 
-### 1.4 v0.9.1 专项验证
+### 1.4 v0.10 专项验证
 
 ```powershell
-cd F:\OptoSimLab
+# 在仓库根目录执行
 .\.venv\Scripts\Activate.ps1
 python -m pytest -q -p no:cacheprovider tests\test_units.py
 python -m pytest -q -p no:cacheprovider tests\test_gain_controlled_edfa.py
@@ -119,24 +122,79 @@ python -m pytest -q -p no:cacheprovider tests\test_mzi_components.py
 python -m pytest -q -p no:cacheprovider tests\test_optical_graph.py
 python -m pytest -q -p no:cacheprovider tests\test_measured_mzm.py
 python -m pytest -q -p no:cacheprovider tests\test_photonic_convolution.py
+python -m pytest -q -p no:cacheprovider tests\test_streaming_and_batch.py
+python -m pytest -q -p no:cacheprovider tests\test_physical_complex_convolution.py
+python -m pytest -q -p no:cacheprovider tests\test_mnist_photonic_model.py
 python -m pytest -q -p no:cacheprovider tests
 ```
 
 最后一条全量测试通过才算完成。专项测试分别验证单位、EDFA 峰值/FWHM/饱和/ASE、耦合器幺正性与 MZI 解析点、图式分支汇合、实测曲线插值，以及光学链路逐点等于直接实卷积。
+
+### 1.5 长序列分块和批量张量
+
+`PhotonicRealConvolution` 和 `DifferentialPhotonicConvolution` 接受任意前导批量维，最后一维始终是一维串行样本。`forward_chunked()` 会给每块自动补足历史样本，因此不是把每段当成互不相关的新记录。
+
+```python
+import torch
+from optosimlab import DifferentialPhotonicConvolution
+
+x = torch.rand(32, 4, 1_000_000)  # batch=32，4 条并行序列
+layer = DifferentialPhotonicConvolution(torch.tensor([-0.2, 0.5, 0.8]))
+y = layer.forward_chunked(x, chunk_size=65_536)
+assert y.shape == x.shape
+```
+
+分块路径与整段路径的输出、输入梯度和 WaveShaper 参数梯度均有自动回归测试。优化器更新后应调用 `project_physical_parameters_()`，把无源 WaveShaper 的衰减投影回非负区间。
+
+### 1.6 MNIST 理想、非理想和强度 MZI 激活实验
+
+模型结构固定为“一层可训练有符号光学卷积 + 一个非线性激活 + 一个电子线性层”。图像按行展平为一维串行数据，但 batch 维不会被混入样本维。
+
+```powershell
+# 首次运行会把公开 MNIST IDX 文件下载到相对目录 data/
+python examples\train_mnist_photonic.py --mode ideal --activation relu --epochs 2
+python examples\train_mnist_photonic.py --mode nonideal --activation relu --epochs 2
+
+# 用无符号强度 MZI 的功率传输曲线替代电子 ReLU
+python examples\train_mnist_photonic.py --mode ideal --activation mzi --epochs 2
+
+# 不下载数据，只验证前向、反向和参数更新链路
+python examples\train_mnist_photonic.py --synthetic-smoke --epochs 1
+```
+
+非理想模式明确启用：MZM 插损 3 dB、消光比 20 dB、光纤衰减 0.2 dB/km，以及探测器读出高斯噪声 `noise_std_w=1e-6 W`。它没有虚构尚未建模的激光 RIN、ADC 量化或器件温漂；这些边界会随实验标定再扩展。
+
+### 1.7 MZI 相干复值光学卷积
+
+`MZIComplexConv1d` 不是旧 `ComplexConv1d` 的四次实卷积包装。它把每个复系数写为 MZI 内部相移 `theta` 控制的幅度和外部相移 `phi` 控制的相位，窗口内各光场随后相干求和。其依据是 [Nature Communications 12, 457 (2021)](https://doi.org/10.1038/s41467-020-20719-7) 的复值 MZI 网络与相干探测路线。
+
+```python
+import torch
+from optosimlab import MZIComplexConv1d
+
+w = torch.tensor([[[0.3 + 0.2j, -0.1 + 0.4j]]])  # out=1, in=1, taps=2
+x = torch.ones(8, 1, 4096, dtype=torch.complex64)
+conv = MZIComplexConv1d(w, tap_delay_samples=1)
+y = conv.forward_chunked(x, chunk_size=512)
+loss = y.abs().square().mean()
+loss.backward()  # theta、phi 和输入都有梯度
+```
+
+该层输出的是经过已知行范数标定后的复场；非零 `insertion_loss_db` 保留公共场损耗，`phase_error_std_rad` 可加入逐次前向的相移误差。旧 `ComplexConv1d` 仍只作为纯数学兼容层保留。
 
 ## 2. 每次开始开发时
 
 打开 PowerShell，逐行执行：
 
 ```powershell
-cd F:\OptoSimLab
+# 在仓库根目录执行
 .\.venv\Scripts\Activate.ps1
 python --version
 python -c "import torch, numpy; print('torch =', torch.__version__); print('numpy =', numpy.__version__)"
 python -m pytest
 ```
 
-成功标准：最后一条命令显示 `92 passed` 或更多，且没有失败项目；没有 CUDA 时会额外显示 1 项明确跳过的 GPU 一致性测试。
+成功标准：最后一条命令显示 `105 passed` 或更多，且没有失败项目；没有 CUDA 时会额外显示 1 项明确跳过的 GPU 一致性测试。
 
 如果 PowerShell 不允许激活虚拟环境，只对当前窗口执行：
 
@@ -150,7 +208,7 @@ Set-ExecutionPolicy -Scope Process -ExecutionPolicy Bypass
 只有在 `.venv` 丢失或换电脑时才执行这一节。
 
 ```powershell
-cd F:\OptoSimLab
+# 在仓库根目录执行
 python -m venv .venv
 .\.venv\Scripts\Activate.ps1
 
@@ -176,7 +234,7 @@ python -m pip install torch --index-url https://download.pytorch.org/whl/cpu --t
 ### 全部验证
 
 ```powershell
-cd F:\OptoSimLab
+# 在仓库根目录执行
 .\.venv\Scripts\Activate.ps1
 python -m pytest
 python examples\train_mzm_bias.py
@@ -251,7 +309,7 @@ python -m pytest
 验证光梳模块：
 
 ```powershell
-cd F:\OptoSimLab
+# 在仓库根目录执行
 .\.venv\Scripts\Activate.ps1
 python -m pytest tests\test_optical_comb.py -q
 ```
@@ -278,7 +336,7 @@ E_out(t) = E_in(t) exp(j Σ beta_k sin(2π f_k t + phi_k)) 10^(-L_dB/20)
 验证这个模块：
 
 ```powershell
-cd F:\OptoSimLab
+# 在仓库根目录执行
 .\.venv\Scripts\Activate.ps1
 python -m pytest tests\test_electro_optic_comb.py -q
 ```
@@ -323,7 +381,7 @@ E_out(f) = sqrt(G_power(f)) × E_in(f)
 验证这个模块：
 
 ```powershell
-cd F:\OptoSimLab
+# 在仓库根目录执行
 .\.venv\Scripts\Activate.ps1
 python -m pytest tests\test_edfa.py -q
 ```
@@ -347,7 +405,7 @@ n_sp = 10^(noise_figure_db / 10) / 2
 验证这个模块：
 
 ```powershell
-cd F:\OptoSimLab
+# 在仓库根目录执行
 .\.venv\Scripts\Activate.ps1
 python -m pytest tests\test_saturated_noisy_edfa.py -q
 ```
@@ -416,7 +474,7 @@ python -m pytest tests\test_overlap_save.py -q
 - [ ] 每个器件均有公式、单位、输入输出契约和失败用例。
 - [ ] 每个可训练参数都是 `nn.Parameter`，并通过梯度测试。
 - [x] CPU 上全部测试通过；如使用 GPU，CPU/GPU 结果在约定误差内一致。
-- [ ] 长序列的频域处理不再依赖未说明的循环卷积。
+- [x] 长序列采用带明确因果历史的精确分块或 overlap-save，不依赖未说明的循环卷积。
 - [x] 至少有一个端到端光计算或光神经网络训练示例。
 - [x] 至少有一个带非理想器件参数的链路示例。
 - [x] `docs/OptoSimLab_使用说明.pdf` 与真实实现、测试结果一致。
@@ -424,7 +482,7 @@ python -m pytest tests\test_overlap_save.py -q
 ## 15. 工程结构
 
 ```text
-F:\OptoSimLab
+OptoSimLab/
 ├── src\optosimlab\
 │   ├── config.py       # 采样网格和物理常数
 │   ├── devices\        # 器件模型

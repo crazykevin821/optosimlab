@@ -12,6 +12,7 @@ dist/
 htmlcov/
 tmp/
 output/
+data/
 
 # LaTeX build intermediates (the reviewed PDF is copied to docs/)
 docs/source/*.aux

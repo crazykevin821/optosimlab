@@ -1,5 +1,17 @@
 # Changelog
 
+## 0.10.0 - 2026-10-18
+
+- Added exact chunked execution for long real and complex one-dimensional sequences while preserving causal history and PyTorch autograd.
+- Verified arbitrary leading batch dimensions for physical WDM real convolution and added full-output/full-gradient regression comparisons.
+- Added `PhotonicMNISTClassifier`: one trainable signed optical convolution, selectable electronic ReLU or intensity-MZI activation, and one electronic linear layer.
+- Added explicit ideal and nonideal MNIST modes. The nonideal path defines 3 dB MZM insertion loss, 20 dB extinction ratio, 0.2 dB/km fibre loss, and detector readout noise in watts.
+- Added standalone unsigned `IntensityMZM` and `IntensityMZMActivation` models instead of deriving the intensity transfer from the differential MZM implementation.
+- Added `MZIComplexWeightBank` and `MZIComplexConv1d`, using coherent complex weights parameterized by MZI internal/external phase shifts following Nature Communications 12, 457 (2021).
+- Added an MNIST training script with a dependency-free IDX reader, synthetic smoke mode, physical-parameter projection, subset controls, and CPU/CUDA selection.
+- Reworked documentation for portable relative commands, Chinese API explanations, parameter tables, model assumptions, and runnable examples.
+- Expanded verification to 105 passing tests plus one conditional CUDA test.
+
 ## 0.9.1 - 2026-10-13
 
 - Fixed the calibrated WDM real-convolution output for user-supplied dispersive fibre with nonzero attenuation.

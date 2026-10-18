@@ -1,0 +1,108 @@
+"""基于 MZI 复权重与相干求和的物理复值一维卷积。"""
+
+from __future__ import annotations
+
+import torch
+from torch import Tensor, nn
+from torch.nn import functional as F
+
+from ..devices.mzm import MZIComplexWeightBank
+
+
+class MZIComplexConv1d(nn.Module):
+    """MZI 参数化的因果复值光学卷积。
+
+    输入形状为 ``(batch, in_channels, samples)``，也接受省略 batch 的
+    ``(in_channels, samples)``。输出满足
+
+    ``y_o[n] = sum_c sum_k w[o,c,k] * x_c[n-kD] + b_o``，
+
+    其中 ``D=tap_delay_samples``。复系数由 :class:`MZIComplexWeightBank`
+    的内部相移 ``theta`` 和外部相移 ``phi`` 产生，随后对各光路做相干
+    场求和；这不同于平方律探测后的实值 WDM 功率卷积。
+    """
+
+    def __init__(
+        self,
+        complex_weights: Tensor,
+        *,
+        tap_delay_samples: int = 1,
+        bias: bool = False,
+        insertion_loss_db: float = 0.0,
+        phase_error_std_rad: float = 0.0,
+        trainable: bool = True,
+    ) -> None:
+        super().__init__()
+        weights = torch.as_tensor(complex_weights)
+        if not torch.is_complex(weights) or weights.ndim != 3:
+            raise ValueError("complex_weights must have shape (out_channels, in_channels, kernel_size)")
+        if not isinstance(tap_delay_samples, int) or tap_delay_samples < 1:
+            raise ValueError("tap_delay_samples must be a positive integer")
+        self.tap_delay_samples = tap_delay_samples
+        self.weight_bank = MZIComplexWeightBank(
+            weights,
+            insertion_loss_db=insertion_loss_db,
+            phase_error_std_rad=phase_error_std_rad,
+            trainable=trainable,
+        )
+        if bias:
+            self.bias = nn.Parameter(torch.zeros(weights.shape[0], dtype=weights.dtype), requires_grad=trainable)
+        else:
+            self.register_parameter("bias", None)
+
+    @property
+    def in_channels(self) -> int:
+        return self.weight_bank.in_channels
+
+    @property
+    def out_channels(self) -> int:
+        return self.weight_bank.out_channels
+
+    @property
+    def kernel_size(self) -> int:
+        return self.weight_bank.kernel_size
+
+    @property
+    def maximum_delay(self) -> int:
+        return (self.kernel_size - 1) * self.tap_delay_samples
+
+    @property
+    def effective_weights(self) -> Tensor:
+        """返回当前 MZI 相移对应的复卷积核。"""
+        return self.weight_bank.effective_weights()
+
+    def forward(self, field: Tensor) -> Tensor:
+        if not isinstance(field, Tensor) or not torch.is_complex(field):
+            raise TypeError("field must be a complex-valued torch.Tensor")
+        unbatched = field.ndim == 2
+        if unbatched:
+            field = field.unsqueeze(0)
+        if field.ndim != 3 or field.shape[1] != self.in_channels:
+            raise ValueError("field must have shape (batch, in_channels, samples)")
+
+        padded = F.pad(field, (self.maximum_delay, 0))
+        windows = padded.unfold(-1, self.maximum_delay + 1, 1)
+        windows = windows[..., :: self.tap_delay_samples].flip(-1)
+        output = self.weight_bank(windows)
+        if self.bias is not None:
+            output = output + self.bias.to(device=output.device, dtype=output.dtype).view(1, -1, 1)
+        return output.squeeze(0) if unbatched else output
+
+    def forward_chunked(self, field: Tensor, chunk_size: int) -> Tensor:
+        """按序列分块计算，结果与一次性因果卷积一致并保留 autograd。"""
+        if not isinstance(chunk_size, int) or chunk_size < 1:
+            raise ValueError("chunk_size must be a positive integer")
+        if field.shape[-1] <= chunk_size:
+            return self(field)
+        chunks: list[Tensor] = []
+        total = field.shape[-1]
+        for start in range(0, total, chunk_size):
+            stop = min(start + chunk_size, total)
+            history_start = max(0, start - self.maximum_delay)
+            segment = field[..., history_start:stop]
+            missing_history = self.maximum_delay - (start - history_start)
+            if missing_history:
+                segment = F.pad(segment, (missing_history, 0))
+            segment_output = self(segment)
+            chunks.append(segment_output[..., - (stop - start) :])
+        return torch.cat(chunks, dim=-1)

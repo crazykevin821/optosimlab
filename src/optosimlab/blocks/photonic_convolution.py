@@ -1,7 +1,8 @@
-"""Hardware-composed real WDM convolution after Xu et al., Nature 2021."""
+"""依据 Xu 等 Nature 2021 路线、由物理器件组成的实值 WDM 卷积。"""
 
 from __future__ import annotations
 
+import copy
 import math
 
 import torch
@@ -18,13 +19,12 @@ from .chain import OpticalChain
 
 
 class PhotonicRealConvolution(nn.Module):
-    """Nonnegative real convolution composed only from physical devices.
+    """仅由物理器件组成的非负实值卷积。
 
-    The executed graph is OpticalFrequencyComb -> WaveShaper -> MZM ->
-    LinearDispersiveFiber -> PhotodetectorSum.  The input sequence is converted
-    to MZM drive voltage through the selected modulator's calibrated inverse.
-    Fibre length is chosen from beta2 so adjacent comb lines acquire exactly
-    tap_delay_samples of relative delay in the narrowband WDM approximation.
+    实际执行图为 OpticalFrequencyComb -> WaveShaper -> MZM ->
+    LinearDispersiveFiber -> PhotodetectorSum。输入序列经所选 MZM 的标定
+    反函数换算为驱动电压；光纤长度由 beta2 决定，使窄带 WDM 近似下的
+    相邻梳齿恰好获得 ``tap_delay_samples`` 个样本的相对延时。
     """
 
     def __init__(
@@ -38,6 +38,7 @@ class PhotonicRealConvolution(nn.Module):
         dispersion_ps_nm_km: float = 17.0,
         modulator: IdealMZM | MachZehnderModulator | MeasuredMZM | None = None,
         fiber: LinearDispersiveFiber | None = None,
+        detector: PhotodetectorSum | None = None,
         trainable: bool = True,
     ) -> None:
         super().__init__()
@@ -106,13 +107,15 @@ class PhotonicRealConvolution(nn.Module):
             if not math.isclose(actual_delay, expected_delay, rel_tol=1e-5, abs_tol=1e-15):
                 raise ValueError("provided fiber does not match tap_delay_samples at this line spacing")
 
-        detector = PhotodetectorSum()
+        selected_detector = detector if detector is not None else PhotodetectorSum()
+        if not isinstance(selected_detector, PhotodetectorSum):
+            raise TypeError("detector must inherit PhotodetectorSum")
         self.optical_chain = OpticalChain.from_graph(
             [
                 ("waveshaper", waveshaper, ("comb", "offsets"), "weighted"),
                 ("modulator", selected_modulator, ("weighted", "voltage"), "modulated"),
                 ("fiber", selected_fiber, ("modulated", "offsets"), "delayed"),
-                ("photodetector", detector, "delayed", "power_w"),
+                ("photodetector", selected_detector, "delayed", "power_w"),
             ],
             outputs="power_w",
         )
@@ -150,7 +153,7 @@ class PhotonicRealConvolution(nn.Module):
         return self.waveshaper.power_transmission_at(offsets)
 
     def detected_power_w(self, samples: Tensor) -> Tensor:
-        """Execute the physical device graph and return detector power in W."""
+        """执行物理器件图并返回单位为 W 的探测功率。"""
         if not isinstance(samples, Tensor) or torch.is_complex(samples) or not samples.is_floating_point():
             raise TypeError("samples must be a real floating-point torch.Tensor")
         if torch.any((samples.detach() < 0) | (samples.detach() > 1)):
@@ -176,7 +179,7 @@ class PhotonicRealConvolution(nn.Module):
         return power[..., : samples.shape[-1]]
 
     def forward(self, samples: Tensor) -> Tensor:
-        """Return calibrated zero-state causal convolution."""
+        """返回经过标定、零初始状态的因果卷积。"""
         detected = self.detected_power_w(samples)
         minimum, maximum = self.modulator.power_transmission_bounds(samples)
         fiber_transmission = self.fiber.power_transmission(samples)
@@ -189,9 +192,40 @@ class PhotonicRealConvolution(nn.Module):
             raise ValueError("combined line power, fibre transmission and MZM swing are too small to calibrate")
         return (detected - baseline) / calibration
 
+    def forward_chunked(self, samples: Tensor, chunk_size: int) -> Tensor:
+        """按序列分块执行，降低长记录的峰值内存并保持精确因果历史。
+
+        每块自动携带 ``(tap_count-1)*tap_delay_samples`` 个历史样本，记录
+        开头缺失的历史用零填充。块之间不截断梯度，拼接结果应与一次性
+        ``forward`` 在数值误差内一致。
+        """
+        if not isinstance(chunk_size, int) or chunk_size < 1:
+            raise ValueError("chunk_size must be a positive integer")
+        if samples.shape[-1] <= chunk_size:
+            return self(samples)
+        maximum_delay = (self.comb.line_count - 1) * self.tap_delay_samples
+        outputs: list[Tensor] = []
+        total = samples.shape[-1]
+        for start in range(0, total, chunk_size):
+            stop = min(start + chunk_size, total)
+            history_start = max(0, start - maximum_delay)
+            segment = samples[..., history_start:stop]
+            missing_history = maximum_delay - (start - history_start)
+            if missing_history:
+                segment = F.pad(segment, (missing_history, 0))
+            segment_output = self(segment)
+            outputs.append(segment_output[..., - (stop - start) :])
+        return torch.cat(outputs, dim=-1)
+
+    def project_physical_parameters_(self) -> "PhotonicRealConvolution":
+        """优化器更新后把无源 WaveShaper 衰减投影回非负物理区间。"""
+        with torch.no_grad():
+            self.waveshaper.attenuation_db.clamp_(min=0.0)
+        return self
+
 
 class DifferentialPhotonicConvolution(nn.Module):
-    """Signed convolution made from two physical convolution paths."""
+    """由两条独立正、负物理卷积支路作差得到的有符号卷积。"""
 
     def __init__(self, weights: Tensor, **kwargs: object) -> None:
         super().__init__()
@@ -200,8 +234,27 @@ class DifferentialPhotonicConvolution(nn.Module):
             raise ValueError("weights must be a non-empty one-dimensional tensor")
         scale = values.abs().max().clamp_min(torch.finfo(values.dtype).eps)
         self.register_buffer("weight_scale", scale)
-        self.positive = PhotonicRealConvolution((values / scale).clamp_min(0.0), **kwargs)
-        self.negative = PhotonicRealConvolution((-values / scale).clamp_min(0.0), **kwargs)
+        positive_kwargs = dict(kwargs)
+        negative_kwargs = copy.deepcopy(kwargs)
+        self.positive = PhotonicRealConvolution((values / scale).clamp_min(0.0), **positive_kwargs)
+        self.negative = PhotonicRealConvolution((-values / scale).clamp_min(0.0), **negative_kwargs)
 
     def forward(self, samples: Tensor) -> Tensor:
         return self.weight_scale * (self.positive(samples) - self.negative(samples))
+
+    def forward_chunked(self, samples: Tensor, chunk_size: int) -> Tensor:
+        """对正、负两条物理支路使用相同分块边界。"""
+        return self.weight_scale * (
+            self.positive.forward_chunked(samples, chunk_size)
+            - self.negative.forward_chunked(samples, chunk_size)
+        )
+
+    @property
+    def effective_weights(self) -> Tensor:
+        """返回两条 WaveShaper 支路当前表示的有符号卷积核。"""
+        return self.weight_scale * (self.positive.power_weights - self.negative.power_weights)
+
+    def project_physical_parameters_(self) -> "DifferentialPhotonicConvolution":
+        self.positive.project_physical_parameters_()
+        self.negative.project_physical_parameters_()
+        return self

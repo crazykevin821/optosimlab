@@ -480,3 +480,173 @@ class MZMWithElectricalFilter(GraphDevice):
         _require_real_voltage(voltage)
         filtered_voltage = self.electrical_filter(torch.complex(voltage, torch.zeros_like(voltage))).real
         return self.mzm(carrier, filtered_voltage)
+
+
+class IntensityMZM(GraphDevice):
+    """独立的无符号强度 MZI 调制器。
+
+    该模型直接使用常见强度传输函数，而不复用差分双输出 MZM：
+
+    ``T(V)=eta*[epsilon+(1-epsilon)*cos^2(pi*(V+V_bias)/(2*V_pi))]``。
+
+    其中 ``eta`` 是插入损耗对应的峰值功率透射率，``epsilon`` 是有限
+    消光比对应的谷值/峰值功率比。输出场取非负平方根，因此本器件只编码
+    强度，不承担复权重的符号或相位编码。
+    """
+
+    graph_input_ports = ("carrier", "voltage")
+
+    def __init__(
+        self,
+        v_pi: float = 1.0,
+        bias_voltage: float = 0.0,
+        insertion_loss_db: float = 0.0,
+        extinction_ratio_db: float = 60.0,
+        *,
+        trainable: bool = True,
+    ) -> None:
+        super().__init__()
+        if v_pi <= 0:
+            raise ValueError("v_pi must be positive")
+        if insertion_loss_db < 0 or extinction_ratio_db < 0:
+            raise ValueError("loss and extinction ratio must not be negative")
+        self.v_pi = nn.Parameter(torch.tensor(float(v_pi)), requires_grad=trainable)
+        self.bias_voltage = nn.Parameter(torch.tensor(float(bias_voltage)), requires_grad=trainable)
+        self.insertion_loss_db = nn.Parameter(torch.tensor(float(insertion_loss_db)), requires_grad=trainable)
+        self.extinction_ratio_db = nn.Parameter(torch.tensor(float(extinction_ratio_db)), requires_grad=trainable)
+
+    def power_transmission(self, voltage: Tensor) -> Tensor:
+        _require_real_voltage(voltage)
+        dtype = voltage.dtype if voltage.is_floating_point() else torch.float32
+        v_pi = nonnegative_parameter(self.v_pi, "v_pi", floor=torch.finfo(dtype).eps).to(
+            voltage.device, dtype
+        )
+        bias = self.bias_voltage.to(voltage.device, dtype)
+        loss = nonnegative_parameter(self.insertion_loss_db, "insertion_loss_db").to(voltage.device, dtype)
+        extinction = nonnegative_parameter(self.extinction_ratio_db, "extinction_ratio_db").to(
+            voltage.device, dtype
+        )
+        ten = torch.tensor(10.0, device=voltage.device, dtype=dtype)
+        eta = torch.pow(ten, -loss / 10.0)
+        epsilon = torch.pow(ten, -extinction / 10.0)
+        phase = torch.pi * (voltage.to(dtype=dtype) + bias) / (2.0 * v_pi)
+        return eta * (epsilon + (1.0 - epsilon) * torch.cos(phase).square())
+
+    def forward(self, carrier: Tensor, voltage: Tensor) -> Tensor:
+        require_complex_field(carrier)
+        if voltage.numel() != 1 and voltage.shape[-1] != carrier.shape[-1]:
+            raise ValueError("carrier and voltage must share their final sample dimension")
+        return carrier * torch.sqrt(self.power_transmission(voltage).to(carrier.real.dtype))
+
+
+class IntensityMZMActivation(nn.Module):
+    """把神经网络实值张量映射到强度 MZI 的非线性传输曲线。
+
+    ``input_scale_v_per_unit`` 把无量纲网络值换算为驱动电压。默认偏置位于
+    四分之一波电压附近，使零点处处于斜率较大的非线性区间。输出是无量纲
+    功率透射率，可替换 ReLU 等电子激活函数做对照实验。
+    """
+
+    def __init__(
+        self,
+        *,
+        v_pi: float = 1.0,
+        bias_voltage: float = -0.5,
+        input_scale_v_per_unit: float = 0.25,
+        insertion_loss_db: float = 0.0,
+        extinction_ratio_db: float = 30.0,
+        trainable: bool = True,
+    ) -> None:
+        super().__init__()
+        if input_scale_v_per_unit < 0:
+            raise ValueError("input_scale_v_per_unit must not be negative")
+        self.input_scale_v_per_unit = nn.Parameter(
+            torch.tensor(float(input_scale_v_per_unit)), requires_grad=trainable
+        )
+        self.modulator = IntensityMZM(
+            v_pi=v_pi,
+            bias_voltage=bias_voltage,
+            insertion_loss_db=insertion_loss_db,
+            extinction_ratio_db=extinction_ratio_db,
+            trainable=trainable,
+        )
+
+    def forward(self, values: Tensor) -> Tensor:
+        if not isinstance(values, Tensor) or torch.is_complex(values) or not values.is_floating_point():
+            raise TypeError("values must be a real floating-point torch.Tensor")
+        scale = nonnegative_parameter(self.input_scale_v_per_unit, "input_scale_v_per_unit").to(
+            values.device, values.dtype
+        )
+        return self.modulator.power_transmission(scale * values)
+
+
+class MZIComplexWeightBank(GraphDevice):
+    """用 MZI 内外相移参数化复权重并完成相干乘加。
+
+    每个输出行先按二范数 ``s`` 标定，再使用
+    ``w/s=cos(theta/2)*exp(j*phi)``。归一化行可嵌入无源酉 MZI 网络，
+    ``s`` 是读出后的已知标定系数。``theta`` 对应 MZI 内部相移，``phi``
+    对应外部相移；这与 Nature Communications 12, 457 (2021) 的复值
+    MZI 权重参数化一致。输入窗口形状应为
+    ``(batch, in_channels, positions, kernel_size)``。
+    """
+
+    def __init__(
+        self,
+        complex_weights: Tensor,
+        *,
+        insertion_loss_db: float = 0.0,
+        phase_error_std_rad: float = 0.0,
+        trainable: bool = True,
+    ) -> None:
+        super().__init__()
+        weights = torch.as_tensor(complex_weights)
+        if not torch.is_complex(weights) or weights.ndim != 3:
+            raise ValueError("complex_weights must have shape (out_channels, in_channels, kernel_size)")
+        if insertion_loss_db < 0 or phase_error_std_rad < 0:
+            raise ValueError("insertion loss and phase error must not be negative")
+        real_dtype = weights.real.dtype
+        row_norm = torch.linalg.vector_norm(weights, dim=(1, 2), keepdim=True)
+        scale = torch.where(row_norm > 0.0, row_norm, torch.ones_like(row_norm))
+        normalized_magnitude = (weights.abs() / scale).clamp(0.0, 1.0)
+        theta = 2.0 * torch.acos(normalized_magnitude)
+        phi = torch.angle(weights)
+        self.theta_rad = nn.Parameter(theta.to(dtype=real_dtype), requires_grad=trainable)
+        self.phi_rad = nn.Parameter(phi.to(dtype=real_dtype), requires_grad=trainable)
+        self.register_buffer("weight_scale", scale.to(dtype=real_dtype))
+        self.insertion_loss_db = nn.Parameter(torch.tensor(float(insertion_loss_db)), requires_grad=trainable)
+        self.phase_error_std_rad = nn.Parameter(torch.tensor(float(phase_error_std_rad)), requires_grad=False)
+
+    @property
+    def out_channels(self) -> int:
+        return self.theta_rad.shape[0]
+
+    @property
+    def in_channels(self) -> int:
+        return self.theta_rad.shape[1]
+
+    @property
+    def kernel_size(self) -> int:
+        return self.theta_rad.shape[2]
+
+    def effective_weights(self) -> Tensor:
+        dtype = self.theta_rad.dtype
+        device = self.theta_rad.device
+        loss = nonnegative_parameter(self.insertion_loss_db, "insertion_loss_db").to(device, dtype)
+        phase_error = nonnegative_parameter(self.phase_error_std_rad, "phase_error_std_rad").to(device, dtype)
+        phase = self.phi_rad
+        if float(phase_error.detach()) > 0.0:
+            phase = phase + torch.randn_like(phase) * phase_error
+        ten = torch.tensor(10.0, device=device, dtype=dtype)
+        field_loss = torch.pow(ten, -loss / 20.0)
+        amplitude = self.weight_scale.to(device, dtype) * field_loss * torch.cos(self.theta_rad / 2.0)
+        return torch.complex(amplitude * torch.cos(phase), amplitude * torch.sin(phase))
+
+    def forward(self, windows: Tensor) -> Tensor:
+        require_complex_field(windows)
+        if windows.ndim != 4:
+            raise ValueError("windows must have shape (batch, in_channels, positions, kernel_size)")
+        if windows.shape[1] != self.in_channels or windows.shape[-1] != self.kernel_size:
+            raise ValueError("window channels/kernel size do not match the MZI weight bank")
+        weights = self.effective_weights().to(device=windows.device, dtype=windows.dtype)
+        return torch.einsum("nclk,ock->nol", windows, weights)

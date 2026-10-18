@@ -8,14 +8,17 @@ from .mzm import (
     DirectionalCoupler2x2,
     FourPortMZM,
     IdealMZM,
+    IntensityMZM,
+    IntensityMZMActivation,
     MachZehnderModulator,
+    MZIComplexWeightBank,
     MeasuredMZM,
     MZMWithElectricalFilter,
     PowerSplitter1x2,
     PracticalMZM,
 )
 from .noise import AdditiveComplexGaussianNoise, OpticalAttenuator
-from .photodetector import BalancedPhotodetector, PhotodetectorSum
+from .photodetector import BalancedPhotodetector, NoisyPhotodetectorSum, PhotodetectorSum
 from .practical_electro_optic_comb import PracticalElectroOpticComb
 from .waveshaper import WaveShaper
 from .base import GraphDevice
@@ -30,13 +33,17 @@ __all__ = [
     "DifferentialDualPortMZM",
     "FourPortMZM",
     "IdealMZM",
+    "IntensityMZM",
+    "IntensityMZMActivation",
     "LinearDispersiveFiber",
     "MachZehnderModulator",
+    "MZIComplexWeightBank",
     "MeasuredMZM",
     "MZMWithElectricalFilter",
     "OpticalAttenuator",
     "OpticalFrequencyComb",
     "PhotodetectorSum",
+    "NoisyPhotodetectorSum",
     "BalancedPhotodetector",
     "PracticalElectroOpticComb",
     "PracticalMZM",

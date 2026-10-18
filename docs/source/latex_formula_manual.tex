@@ -29,8 +29,8 @@ xleftmargin=0.5em,xrightmargin=0.5em,aboveskip=0.7em,belowskip=0.7em}
 
 \title{\textcolor{navy}{\Huge OptoSimLab}\\[0.6em]
 \textcolor{teal}{\Large 使用说明与公式自检记录}}
-\author{版本 0.9.1 \quad 项目位置：\texttt{F:\textbackslash OptoSimLab}}
-\date{2026-10-13}
+\author{版本 0.10.0 \quad 可移植安装与使用手册}
+\date{2026-10-18}
 
 \begin{document}
 \maketitle
@@ -70,16 +70,16 @@ OptoSimLab 是基于 PyTorch 的\textbf{复包络、信号级、可微分}光学
 \subsection{进入已有环境}
 在 PowerShell 中执行。若提示符开头出现 \pkg{(.venv)}，代表虚拟环境已经激活。
 \begin{lstlisting}[language=bash]
-cd F:\OptoSimLab
+# Run in the repository root
 .\.venv\Scripts\Activate.ps1
 python -m pytest -q -p no:cacheprovider tests
 python examples\train_mzm_bias.py
 \end{lstlisting}
-当前 Windows CPU 环境的验收结果是：\textbf{92 项通过，1 项跳过}。跳过项是 CPU/CUDA 一致性测试，因为当前 PyTorch 不带 CUDA；这不是测试失败。
+当前 Windows CPU 环境的验收结果是：\textbf{105 项通过，1 项跳过}。跳过项是 CPU/CUDA 一致性测试，因为当前 PyTorch 不带 CUDA；这不是测试失败。
 
 \subsection{从零安装}
 \begin{lstlisting}[language=bash]
-cd F:\OptoSimLab
+# Run in the repository root
 python -m venv .venv
 .\.venv\Scripts\Activate.ps1
 python -m pip install --upgrade pip
@@ -90,9 +90,9 @@ python -m pytest -q -p no:cacheprovider tests
 
 \subsection{安装已打包版本}
 \begin{lstlisting}[language=bash]
-cd F:\OptoSimLab
+# Run in the repository root
 .\.venv\Scripts\Activate.ps1
-python -m pip install --force-reinstall --no-deps .\dist\optosimlab-0.9.1-py3-none-any.whl
+python -m pip install --force-reinstall --no-deps .\dist\optosimlab-0.10.0-py3-none-any.whl
 python -c "from optosimlab import PhotonicRealConvolution; print('import OK')"
 \end{lstlisting}
 
@@ -160,6 +160,14 @@ a=\frac{V-V_i}{V_{i+1}-V_i},\\
 E_{\mathrm{out}}&=E_{\mathrm{in}}\sqrt{T(V)}\exp[\mathrm{j}\phi(V)].
 \end{align}
 CSV 默认列为 \pkg{voltage\_v,power\_transmission}，可选列为 \pkg{phase\_rad}。钳位是为了避免对未测区域作无依据外推，不代表真实器件在范围外恒定。
+
+常见的无符号强度调制不应与差分双输出结构混用。v0.10 新增独立的 \pkg{IntensityMZM}：
+\begin{equation}
+T_{\mathrm I}(V)=\eta\left[\epsilon+(1-\epsilon)
+\cos^2\!\left(\frac{\pi(V+V_{\mathrm{bias}})}{2V_\pi}\right)\right],
+\quad \eta=10^{-L/10},\quad \epsilon=10^{-\mathrm{ER}/10}.
+\end{equation}
+它直接输出非负强度传输，不调用 \pkg{DifferentialDualPortMZM}。\pkg{IntensityMZMActivation} 先用单位为 $\mathrm{V/unit}$ 的 \pkg{input\_scale\_v\_per\_unit} 把网络值映射为电压，再返回 $T_{\mathrm I}$；默认偏置选在斜率较大的非线性区，可与电子 ReLU 做公平对照。
 
 \subsection{频域光梳与理想电光梳}
 频域光梳每条谱线都必须落在 FFT bin 上：
@@ -262,7 +270,7 @@ n_{\mathrm{sp}}&=\frac{10^{\mathrm{NF}_{\mathrm{dB}}/10}}{2}.
 旧 \pkg{SmallSignalEDFA} 和 \pkg{SaturatedNoisyEDFA} 的泵浦电流接口仅为 v0.7 兼容，不应用于新的商用品级链路配置。
 
 \section{功能模块、链路和训练}
-\subsection{复值卷积和长序列 FIR}
+\subsection{图式链路、兼容复卷积和长序列 FIR}
 \pkg{OpticalChain} 保留串行构造方式和显式节点的 \pkg{from\_graph}，并新增 \pkg{from\_device\_graph}。所有硬件器件继承 \pkg{GraphDevice}，并暴露命名输入/输出端口。单端口使用 \pkg{connect()}，多输出和多输入分别使用 \pkg{connect\_outputs()} 与 \pkg{connect\_inputs()}。Chain 从任一器件出发沿上下游发现整个连通分量，自动拓扑排序；重复占用输入端口、未知端口和环路会明确报错。未连接的输入成为外部输入，未连接的输出成为默认终端输出，因此分束器可以只接一个支路，耦合器可从两个前置器件直接汇合。
 
 \begin{lstlisting}[language=Python]
@@ -336,6 +344,69 @@ p_w = conv.detected_power_w(x)
 assert torch.allclose(p_w, 1e-3 * y, atol=1e-9)
 \end{lstlisting}
 
+\subsection{批量张量与长序列精确分块}
+实值物理卷积把最后一维解释为串行样本，前面的任意维均作为批量或并行维保留。例如输入可为 \pkg{(batch, channels, samples)}，同一光学核会独立作用于每条序列。对长记录，令最大历史长度
+\begin{equation}
+H=(K-1)D,
+\end{equation}
+其中 $K$ 是抽头数、$D$ 是相邻抽头的样本延时。\pkg{forward\_chunked(x,C)} 在每个长度为 $C$ 的块前保留 $H$ 个历史样本，记录起点不足部分补零，再只取当前块对应输出。因而它不是把各块当作独立记录，其输出和梯度都与整段因果卷积一致。
+
+\begin{lstlisting}[language=Python]
+x = torch.rand(32, 4, 1_000_000)
+conv = DifferentialPhotonicConvolution(
+    torch.tensor([-0.2, 0.5, 0.8]))
+y = conv.forward_chunked(x, chunk_size=65_536)
+loss = y.square().mean()
+loss.backward()
+optimizer.step()
+conv.project_physical_parameters_()
+\end{lstlisting}
+最后一步将无源 WaveShaper 的衰减投影回非负区间，防止普通优化器一步越过物理边界。
+
+\subsection{MZI 相干复值光学卷积}
+参考 Nature Communications 12, 457 (2021) 的 MZI 复权重网络，\pkg{MZIComplexWeightBank} 对每个输出行先作二范数标定 $s_o$，再将归一化复系数写为
+\begin{equation}
+\frac{w_{ock}}{s_o}=\cos\!\left(\frac{\theta_{ock}}{2}\right)
+\exp(\mathrm{j}\phi_{ock}),\qquad
+s_o=\left(\sum_{c,k}|w_{ock}|^2\right)^{1/2}.
+\end{equation}
+$\theta$ 是 MZI 内部相移，$\phi$ 是外部相移。归一化行可嵌入无源酉网络，$s_o$ 是已知读出标定；可选插损以场系数 $10^{-L/20}$ 作用，可选 \pkg{phase\_error\_std\_rad} 在每次前向加入相移误差。\pkg{MZIComplexConv1d} 对延时窗口内的复场做相干乘加：
+\begin{equation}
+y_o[n]=\sum_c\sum_{k=0}^{K-1}w_{ock}x_c[n-kD]+b_o.
+\end{equation}
+输入和输出均为复张量，幅度与相位通过相干场保留；这与先平方律探测、只能得到同号功率和的 WDM 实值路线不同。
+
+\begin{lstlisting}[language=Python]
+w = torch.tensor([[[0.3+0.2j, -0.1+0.4j]]])
+x = torch.ones(8, 1, 4096, dtype=torch.complex64)
+conv = MZIComplexConv1d(w, tap_delay_samples=1)
+y = conv.forward_chunked(x, chunk_size=512)
+y.abs().square().mean().backward()
+\end{lstlisting}
+
+\subsection{MNIST 理想、非理想与光学激活实验}
+\pkg{PhotonicMNISTClassifier} 将 $28\times28$ 灰度图按行展平为 784 点一维序列，但保留 batch 维。网络严格由一层可训练有符号光卷积、一个非线性激活和一个电子 \pkg{Linear(784,10)} 组成。
+
+\begin{longtable}{L{38mm}L{53mm}L{58mm}}
+\toprule
+\textbf{配置} & \textbf{理想模式} & \textbf{非理想模式}\\
+\midrule
+MZM & 理想、无插损 & $3\,\mathrm{dB}$ 插损，$20\,\mathrm{dB}$ 消光比\\
+色散光纤 & 自动匹配延时、无损 & 自动匹配延时，$0.2\,\mathrm{dB/km}$\\
+探测器 & 无读出噪声 & 高斯读出噪声，默认 $10^{-6}\,\mathrm W$ RMS\\
+激活 & 电子 ReLU 或强度 MZI & 电子 ReLU 或强度 MZI\\
+\bottomrule
+\end{longtable}
+当前没有加入未定义参数的激光 RIN、ADC 量化和温漂；不能把“非理想模式”误解为已复刻某台完整实验仪器。
+
+\begin{lstlisting}[language=bash]
+python examples\train_mnist_photonic.py --mode ideal --activation relu
+python examples\train_mnist_photonic.py --mode nonideal --activation relu
+python examples\train_mnist_photonic.py --mode ideal --activation mzi
+python examples\train_mnist_photonic.py --synthetic-smoke --epochs 1
+\end{lstlisting}
+真实数据使用相对目录 \pkg{data/}，命令不含任何开发者电脑的绝对路径。脚本内置 IDX 读取器，不强制安装 torchvision。
+
 \subsection{最小可运行链路}
 \begin{lstlisting}[language=Python]
 import torch
@@ -380,7 +451,10 @@ MZM & 共享干涉器的峰值/零点与互补输出；$3\,\mathrm{dB}$ 插损�
 EDFA & dB 增益设定、$-3\,\mathrm{dB}$ 带宽、饱和单调性、ASE PSD 非负和梯度；确认新接口无泵浦电流。\\
 图式链路 & 器件端口直连、拓扑发现、分束多输出、可选开路、双输入汇合和环路拒绝。\\
 Nature 实值卷积 & 真实器件类注册、WaveShaper 功率权重、MZM 反标定、色散延时、有损光纤校准、探测功率及正/负双支路逐点对照直接卷积。\\
-复值和长序列模块 & 复卷积偏置一次性计入；Overlap-Save 与直接线性卷积、批量维、梯度一致。\\
+批量与分块 & 三维批量张量；整段/分块输出与梯度逐项一致；20 万点、batch=2 的分块前向/反向均有限；物理参数投影。\\
+MZI 复值卷积 & 复核初始化反求 $\theta,\phi$；相干乘加逐点对照；批量/无批量；分块；输入和相移梯度。\\
+MNIST 与强度 MZI & 理想/非理想模型前向反向；电子 ReLU；独立强度 MZI 公式、非负输出和梯度；三种训练命令冒烟。\\
+兼容复值和长序列 FIR & 旧复卷积偏置一次性计入；Overlap-Save 与直接线性卷积、批量维、梯度一致。\\
 系统指标 & Parseval 频谱、眼图、EVM、等先验实高斯二元假设下的 Q 与 BER。\\
 设备一致性 & CPU 路径通过；CUDA PyTorch 环境下自动执行 CPU/CUDA 一致性测试。\\
 \bottomrule
@@ -398,7 +472,7 @@ Nature 实值卷积 & 真实器件类注册、WaveShaper 功率权重、MZM 反�
 
 \subsection{复现实验命令}
 \begin{lstlisting}[language=bash]
-cd F:\OptoSimLab
+# Run in the repository root
 .\.venv\Scripts\Activate.ps1
 python -m compileall -q src tests examples
 python -m pytest -q -p no:cacheprovider tests
@@ -406,7 +480,7 @@ python -m pip wheel --no-deps --no-build-isolation --wheel-dir dist .
 python -c "from optosimlab import OverlapSaveFIR; print('package OK')"
 \end{lstlisting}
 \begin{tcolorbox}[colback=lightblue,colframe=teal,title=当前验收结果]
-版本 0.9.1 已完成源码编译、专项测试、最终全量测试、示例运行和 wheel 隔离导入。全量结果：\textbf{92 passed, 1 skipped}。无 CUDA 的 CPU 环境中该跳过项是预期行为；在 CUDA 环境中它会自动运行。
+版本 0.10.0 已完成源码编译、专项测试、最终全量测试、示例运行和 wheel 隔离导入。全量结果：\textbf{105 passed, 1 skipped}。无 CUDA 的 CPU 环境中该跳过项是预期行为；在 CUDA 环境中它会自动运行。
 \end{tcolorbox}
 
 \section{当前完成度、限制与后续实验标定}
@@ -423,4 +497,6 @@ python -c "from optosimlab import OverlapSaveFIR; print('package OK')"
 
 \section{参考文献}
 X.~Xu, M.~Tan, B.~Corcoran, et al., ``11 TOPS photonic convolutional accelerator for optical neural networks,'' \textit{Nature}, vol.~589, pp.~44--51, 2021. DOI: \href{https://doi.org/10.1038/s41586-020-03063-0}{10.1038/s41586-020-03063-0}.
+
+Y.~Shen, N.~C.~Harris, S.~Skirlo, et al., ``An optical neural chip for implementing complex-valued neural network,'' \textit{Nature Communications}, vol.~12, article~457, 2021. DOI: \href{https://doi.org/10.1038/s41467-020-20719-7}{10.1038/s41467-020-20719-7}.
 \end{document}

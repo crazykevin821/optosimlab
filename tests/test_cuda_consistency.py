@@ -4,6 +4,7 @@ import torch
 from optosimlab import (
     ElectroOpticComb,
     LinearDispersiveFiber,
+    MZIComplexConv1d,
     OverlapSaveFIR,
     PracticalElectroOpticComb,
     SimulationGrid,
@@ -26,3 +27,18 @@ def test_core_optical_modules_match_between_cpu_and_cuda() -> None:
         cpu_output = module(field)
         cuda_output = module.cuda()(field.cuda()).cpu()
         assert torch.allclose(cuda_output, cpu_output, atol=2e-5, rtol=2e-5)
+
+    complex_convolution = MZIComplexConv1d(
+        torch.tensor(
+            [
+                [[0.4 + 0.2j, -0.1 + 0.3j, 0.05 - 0.2j]],
+                [[-0.2 + 0.1j, 0.25 - 0.05j, 0.15 + 0.1j]],
+            ],
+            dtype=torch.complex64,
+        ),
+        tap_delay_samples=2,
+    )
+    complex_input = torch.randn(3, 1, 61, dtype=torch.complex64)
+    cpu_output = complex_convolution(complex_input)
+    cuda_output = complex_convolution.cuda()(complex_input.cuda()).cpu()
+    assert torch.allclose(cuda_output, cpu_output, atol=2e-5, rtol=2e-5)

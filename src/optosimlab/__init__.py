@@ -4,6 +4,7 @@ from .config import C_LIGHT, H_PLANCK, SimulationGrid
 from .blocks import (
     ComplexConv1d,
     DifferentialPhotonicConvolution,
+    MZIComplexConv1d,
     OpticalChain,
     OverlapSaveFIR,
     PhotonicRealConvolution,
@@ -19,12 +20,16 @@ from .devices import (
     FourPortMZM,
     GraphDevice,
     IdealMZM,
+    IntensityMZM,
+    IntensityMZMActivation,
     LinearDispersiveFiber,
     MachZehnderModulator,
+    MZIComplexWeightBank,
     MeasuredMZM,
     MZMWithElectricalFilter,
     OpticalAttenuator,
     OpticalFrequencyComb,
+    NoisyPhotodetectorSum,
     PhotodetectorSum,
     PracticalElectroOpticComb,
     PracticalMZM,
@@ -45,6 +50,7 @@ from .metrics import (
     power_spectrum,
     snr_db,
 )
+from .models import PhotonicMNISTClassifier
 
 __all__ = [
     "C_LIGHT",
@@ -62,12 +68,16 @@ __all__ = [
     "FourPortMZM",
     "GraphDevice",
     "IdealMZM",
+    "IntensityMZM",
+    "IntensityMZMActivation",
     "LinearDispersiveFiber",
     "MachZehnderModulator",
+    "MZIComplexWeightBank",
     "MeasuredMZM",
     "MZMWithElectricalFilter",
     "OpticalAttenuator",
     "OpticalFrequencyComb",
+    "NoisyPhotodetectorSum",
     "PhotodetectorSum",
     "PracticalElectroOpticComb",
     "PracticalMZM",
@@ -77,6 +87,7 @@ __all__ = [
     "OpticalChain",
     "OverlapSaveFIR",
     "DifferentialPhotonicConvolution",
+    "MZIComplexConv1d",
     "PhotonicRealConvolution",
     "WaveShaper",
     "mean_power",
@@ -97,4 +108,5 @@ __all__ = [
     "power_ratio_to_db",
     "w_to_dbm",
     "w_to_mw",
+    "PhotonicMNISTClassifier",
 ]

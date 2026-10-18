@@ -38,6 +38,36 @@ class PhotodetectorSum(GraphDevice):
         return responsivity * power_w
 
 
+class NoisyPhotodetectorSum(PhotodetectorSum):
+    """带加性高斯读出噪声的 WDM 功率探测器。
+
+    ``noise_std_w`` 是探测器功率读数的每采样点标准差，单位 W。噪声加在
+    平方律探测和通道求和之后，因此表示探测器/TIA/ADC 的等效读出噪声，
+    不表示光场上的 ASE。设为零时严格退化为 :class:`PhotodetectorSum`。
+    """
+
+    def __init__(
+        self,
+        responsivity_a_per_w: float = 1.0,
+        noise_std_w: float = 0.0,
+        *,
+        trainable: bool = False,
+    ) -> None:
+        super().__init__(responsivity_a_per_w, trainable=trainable)
+        if noise_std_w < 0:
+            raise ValueError("noise_std_w must not be negative")
+        self.noise_std_w = nn.Parameter(torch.tensor(float(noise_std_w)), requires_grad=trainable)
+
+    def forward(self, channel_fields: Tensor) -> Tensor:
+        power = super().forward(channel_fields)
+        noise_std = nonnegative_parameter(self.noise_std_w, "noise_std_w").to(
+            device=power.device, dtype=power.dtype
+        )
+        if float(noise_std.detach()) == 0.0:
+            return power
+        return power + torch.randn_like(power) * noise_std
+
+
 class BalancedPhotodetector(GraphDevice):
     """Subtract square-law powers from positive and negative WDM branches."""
 
