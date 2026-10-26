@@ -1,4 +1,4 @@
-"""Deterministic optical frequency-comb source on an FFT sampling grid."""
+"""定义在 FFT 采样网格上的确定性光学频率梳。"""
 
 from __future__ import annotations
 
@@ -13,19 +13,16 @@ from .base import GraphDevice, nonnegative_parameter
 
 class OpticalFrequencyComb(GraphDevice):
     graph_input_ports = ("samples",)
-    """Generate a carrier-centred, discrete optical frequency comb.
+    """生成以载波为中心的离散光学频率梳。
 
-    The source contains lines on integer multiples of line_spacing_hz.  Odd
-    counts are symmetric about the carrier; even counts use offsets
-    -line_count/2, ..., line_count/2-1 and therefore still include the carrier.
-    Each line has trainable power and phase.  A line must fall exactly on an FFT
-    bin for the requested record length; this deterministic first version
-    rejects off-bin spacings rather than silently introducing spectral leakage.
+    梳齿位于 ``line_spacing_hz`` 的整数倍。奇数梳齿关于载波对称；偶数梳齿
+    使用 ``-line_count/2,...,line_count/2-1``，仍包含载波。每个梳齿具有
+    可训练功率和相位。给定记录长度时梳齿必须严格落在 FFT 频点上；本确定性
+    模型会拒绝未对齐间隔，避免悄然引入频谱泄漏。
 
-    If ``P_k`` is a line power and ``phi_k`` its phase, the unnormalised DFT
-    coefficient is ``N sqrt(P_k) exp(j phi_k)``.  PyTorch's inverse FFT then
-    yields a waveform whose mean power is exactly ``sum(P_k)`` for distinct
-    bins.  Frequencies are offsets from the optical carrier.
+    若 ``P_k`` 为梳齿功率、``phi_k`` 为相位，则未归一化 DFT 系数为
+    ``N*sqrt(P_k)*exp(j*phi_k)``。对不同频点使用 PyTorch 逆 FFT 后，
+    波形平均功率严格等于 ``sum(P_k)``。所有频率均为相对光载波的频偏。
     """
 
     def __init__(
@@ -64,11 +61,11 @@ class OpticalFrequencyComb(GraphDevice):
 
     @property
     def total_power(self) -> Tensor:
-        """The sum of configured per-line powers in field-squared units."""
+        """以场平方单位返回各梳齿配置功率之和。"""
         return nonnegative_parameter(self.line_powers, "line_powers").sum()
 
     def line_bin_indices(self, samples: int) -> Tensor:
-        """Return native-FFT indices after validating bin alignment and bandwidth."""
+        """校验频点对齐和带宽后返回 FFT 原生索引。"""
         if samples <= 0:
             raise ValueError("samples must be positive")
         bin_width_hz = self.grid.sample_rate_hz / samples
@@ -86,7 +83,7 @@ class OpticalFrequencyComb(GraphDevice):
         return signed_bins.remainder(samples)
 
     def line_offsets_hz(self, samples: int, *, device: torch.device | None = None) -> Tensor:
-        """Carrier-relative offsets in the same order as the power and phase parameters."""
+        """返回与功率和相位参数同序的载频偏移。"""
         indices = self.line_bin_indices(samples).to(device=device)
         signed = torch.where(indices <= samples // 2, indices, indices - samples)
         return signed.to(torch.float64) * (self.grid.sample_rate_hz / samples)
@@ -97,7 +94,7 @@ class OpticalFrequencyComb(GraphDevice):
         device: torch.device | None = None,
         dtype: torch.dtype = torch.float64,
     ) -> Tensor:
-        """Return configured carrier offsets without finite-record bin checks."""
+        """不检查有限记录频点对齐，直接返回配置的载频偏移。"""
         offsets = torch.arange(
             -(self.line_count // 2),
             self.line_count - self.line_count // 2,
@@ -110,7 +107,7 @@ class OpticalFrequencyComb(GraphDevice):
         return offsets
 
     def spectrum(self, samples: int, *, device: torch.device | None = None, real_dtype: torch.dtype | None = None) -> Tensor:
-        """Return the unnormalised FFT spectrum of the comb waveform."""
+        """返回光梳波形未经归一化的 FFT 频谱。"""
         indices = self.line_bin_indices(samples)
         device = device or self.line_powers.device
         dtype = real_dtype or self.line_powers.dtype
@@ -121,7 +118,7 @@ class OpticalFrequencyComb(GraphDevice):
         return base.scatter(0, indices.to(device=device), coefficients)
 
     def forward(self, samples: int, *, device: torch.device | None = None, real_dtype: torch.dtype | None = None) -> Tensor:
-        """Generate a one-dimensional complex envelope with ``samples`` points."""
+        """生成包含 ``samples`` 点的一维复包络。"""
         return torch.fft.ifft(self.spectrum(samples, device=device, real_dtype=real_dtype))
 
     def channel_fields(
@@ -131,12 +128,11 @@ class OpticalFrequencyComb(GraphDevice):
         device: torch.device | None = None,
         real_dtype: torch.dtype | None = None,
     ) -> Tensor:
-        """Return separated comb-line envelopes with shape (line_count, samples).
+        """返回形状为 ``(line_count, samples)`` 的分离梳齿包络。
 
-        Each row is one coherent tone in sqrt(W), and its time-averaged power
-        is exactly the corresponding line_powers entry.  Unlike spectrum(),
-        this separated-channel representation does not require the finite
-        record to contain an integer number of tone periods.
+        每一行是单位为 sqrt(W) 的一路相干音调，其时间平均功率严格等于
+        对应的 ``line_powers``。与 ``spectrum()`` 不同，此分通道表示不要求
+        有限记录包含整数个音调周期。
         """
         if samples <= 0:
             raise ValueError("samples must be positive")
@@ -161,11 +157,10 @@ class OpticalFrequencyComb(GraphDevice):
         device: torch.device | None = None,
         real_dtype: torch.dtype | None = None,
     ) -> Tensor:
-        """Return one baseband envelope per comb carrier.
+        """为每个光梳载波返回一路基带包络。
 
-        Carrier frequencies are supplied separately by
-        nominal_line_offsets_hz().  This representation is intended for WDM
-        devices that explicitly use each channel's carrier offset.
+        载频由 ``nominal_line_offsets_hz()`` 另行提供。该表示用于显式使用
+        每个通道载频偏移的 WDM 器件。
         """
         if samples <= 0:
             raise ValueError("samples must be positive")

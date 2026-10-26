@@ -1,6 +1,6 @@
 # OptoSimLab 中文 API 与使用样例
 
-本文对应 v0.10.0。所有公开接口默认采用 SI 单位：光场为 `sqrt(W)`，功率为 W，电压为 V，时间为 s，频率为 Hz，长度为 m，相位为 rad，增益和损耗为功率 dB。
+本文对应 v0.10.1。所有公开接口默认采用 SI 单位：光场为 `sqrt(W)`，功率为 W，电压为 V，时间为 s，频率为 Hz，长度为 m，相位为 rad，增益和损耗为功率 dB。
 
 ## 1. 核心与单位
 
@@ -11,7 +11,7 @@
 | `sample_rate_hz` | 复包络采样率，必须大于零 |
 | `center_wavelength_m` | 中心光波长，默认 1550 nm |
 
-提供 `time_s()`、`frequencies_hz()` 和中心光频率。频率轴遵循 PyTorch FFT 顺序。
+提供采样间隔属性 `dt_s` 和 `frequencies_hz(samples)`；频率轴遵循 PyTorch FFT 顺序，并表示相对光载波的频偏。
 
 ### `units.py`
 
@@ -90,7 +90,7 @@ y = activation(x)
 ### `ElectroOpticComb`、`PracticalElectroOpticComb`
 
 - 理想模型参数：`modulation_frequency_hz`、`modulation_indices_rad`、`rf_phases_rad`、`insertion_loss_db`。
-- 实用模型额外加入 `rf_cutoff_hz` 和 `rf_phase_noise_diffusion_rad2_per_s`。
+- 实用模型额外加入 `rf_bandwidth_hz` 和 `rf_phase_noise_diffusion_rad2_per_s`。
 
 ### `FrequencyDomainLowPass`
 
@@ -140,7 +140,7 @@ field_out = device(field_in, drive_voltage)
 ### `OpticalAttenuator`、`AdditiveComplexGaussianNoise`
 
 - 衰减器参数 `attenuation_db` 是功率 dB。
-- 复高斯噪声参数 `noise_rms_field` 是复场 RMS，输出期望噪声功率为其平方。
+- 复高斯噪声参数 `sigma` 是复场 RMS，输出期望噪声功率为 `sigma**2`。
 
 ### `GainControlledEDFA`
 
@@ -152,8 +152,8 @@ field_out = device(field_in, drive_voltage)
 
 - `SmallSignalEDFA` 参数：`grid`、`pump_current_ma`、`transparency_current_ma`、
   `gain_slope_db_per_ma`、`gain_bandwidth_hz`、`gain_center_offset_hz`、`trainable`。
-- `SaturatedNoisyEDFA` 额外参数：`output_saturation_power_dbm`、
-  `noise_figure_db`、`enable_saturation`、`enable_ase`。
+- `SaturatedNoisyEDFA` 额外参数：`saturation_power`（与输入平均功率同单位）、
+  `noise_figure_db`、`enable_ase`。其饱和关系为 `G_eff=G_ss/(1+P_in/P_sat)`。
 - 新实验优先使用 `GainControlledEDFA`，避免把泵浦电流经验映射误当成器件通用规律。
 
 ```python
@@ -168,6 +168,8 @@ amplified_field = amplifier(field_in)
 - `OpticalChain(device1, device2, ...)`：简单串联。
 - `OpticalChain.from_graph(nodes, outputs)`：显式命名数据流图。
 - `OpticalChain.from_device_graph(seed, outputs=...)`：从器件 `connect()`、`connect_inputs()`、`connect_outputs()` 声明的端口连接自动发现拓扑。
+
+器件图中的节点应继承 `GraphDevice`，通过 `graph_input_ports`、`graph_output_ports` 声明端口；`named(name)` 设置稳定节点名，`connect()`、`connect_inputs()`、`connect_outputs()` 建立连接。连接只保存拓扑元数据，`OpticalChain` 会检查重复输入和环路，并只注册每个器件一次。
 
 ### `PhotonicRealConvolution`
 
@@ -184,20 +186,23 @@ amplified_field = amplifier(field_in)
 | `detector` | 可选理想或带噪功率探测器 |
 | `trainable` | WaveShaper 权重是否训练 |
 
-`forward()` 返回校准后的无量纲因果卷积；`detected_power_w()` 返回包含插损、消光底值、光纤损耗和探测噪声的功率读数；`forward_chunked()` 用于长序列。
+`forward()` 返回校准后的无量纲因果卷积；`detected_power_w()` 返回包含插损、消光底值、光纤损耗和探测噪声的功率读数；`forward_chunked()` 拼接长序列分块结果。需要真正限制训练峰值内存时使用 `iter_chunked()`，对每块立即计算损失并反向传播，不保留全部分块计算图。
 
 本版还实际执行了 `batch=2`、每条 `200000` 点的有符号光卷积分块前向与反向传播；输出、损失、输入梯度和全部可训练器件参数梯度均为有限值。
 
 ### `DifferentialPhotonicConvolution`
 
-把有符号核拆成两个独立的正/负物理支路，再做差。`effective_weights` 返回当前两路 WaveShaper 表示的有效核。
+使用两条独立的正/负物理支路和平衡探测差值表示有符号核。若原始核为 `w`、`s=max(1,max(abs(w)))`、差分深度为 `d`，初始化功率权重为 `p+=(1+d*w/s)/2`、`p-=(1-d*w/s)/2`，输出乘 `s/d`，因此 `(s/d)*(p+-p-)=w`。尺度下限 1 保证全零或极小初始核仍有可用动态范围。默认 `d=0.8` 使两支路都远离 0/1 边界，避免旧式正负截断在零点产生近乎消失的梯度，并允许训练时权重跨越零点。`effective_weights` 返回当前两路 WaveShaper 表示的有效核。
 
 ```python
 x = torch.rand(16, 2, 100_000)
-conv = DifferentialPhotonicConvolution(torch.tensor([-0.3, 0.2, 0.7]))
-y = conv.forward_chunked(x, 8192)
-loss = y.square().mean()
-loss.backward()
+conv = DifferentialPhotonicConvolution(
+    torch.tensor([-0.3, 0.2, 0.7]), differential_depth=0.8
+)
+optimizer = torch.optim.Adam(conv.parameters(), lr=1e-3)
+optimizer.zero_grad()
+for y_chunk in conv.iter_chunked(x, 8192):
+    (y_chunk.square().sum() / x.numel()).backward()
 optimizer.step()
 conv.project_physical_parameters_()
 ```
@@ -213,6 +218,8 @@ conv.project_physical_parameters_()
 - `weight_scale`：每个输出行的二范数标定常数。
 - `insertion_loss_db`：公共场插损。
 - `phase_error_std_rad`：每次前向的独立高斯相移误差。
+
+训练后调用 `project_physical_parameters_()`：公共插损投影到非负区间；负的 `cos(theta/2)` 等价并入 `phi+pi`；每个输出行的归一化幅度二范数投影到不超过 1，保证无源 MZI 网络可实现。
 
 ### `MZIComplexConv1d`
 
@@ -235,13 +242,15 @@ conv.project_physical_parameters_()
 | `detector_noise_std_w` | `1e-6` | 非理想模式探测读出噪声 |
 | `chunk_size` | `None` | 长序列分块大小 |
 
-输入可为 `(batch,1,28,28)` 或 `(batch,784)`，输出 `(batch,10)` logits。训练循环必须在 `optimizer.step()` 后调用 `model.project_physical_parameters_()`。
+输入可为 `(batch,1,28,28)` 或 `(batch,784)`，输出 `(batch,10)` logits。训练循环必须在 `optimizer.step()` 后调用 `model.project_physical_parameters_()`；该方法同时投影光卷积 WaveShaper 与强度 MZI 激活器的 `input_scale_v_per_unit`、`v_pi`、插损和消光比。
 
 ```powershell
 python examples\train_mnist_photonic.py --mode ideal --activation relu --epochs 2
 python examples\train_mnist_photonic.py --mode nonideal --activation relu --epochs 2
 python examples\train_mnist_photonic.py --mode ideal --activation mzi --epochs 2
 ```
+
+在固定随机种子、4096 条训练样本、1024 条测试样本、CPU、2 epoch 快速验收中，实测测试准确率分别为：理想/ReLU `77.83%`，非理想/ReLU `78.32%`，理想/强度 MZI `62.50%`。这些数字只用于证明三条链路可训练且损失下降，不是完整 MNIST 基准精度声明。
 
 ## 8. 兼容模块与系统指标
 
@@ -253,7 +262,7 @@ python examples\train_mnist_photonic.py --mode ideal --activation mzi --epochs 2
 
 ### `OverlapSaveFIR`
 
-参数：复数 `taps`、`fft_size`、`trainable`。最后一维是样本；实现带零初始
+参数：复数 `impulse_response`、`fft_size`、`trainable`。最后一维是样本；实现带零初始
 状态的线性因果 FIR，不把循环卷积伪影带入有效输出。
 
 ```python
@@ -275,7 +284,89 @@ evm = error_vector_magnitude(reference_symbols, received_symbols)
 ber = gaussian_ber_estimate(samples_for_zero, samples_for_one)
 ```
 
-## 9. 最小自检命令
+## 9. 每个公开模型/模块的最短调用样例
+
+下面的样例与前文参数表配套，覆盖包顶层导出的全部模型类。`GraphDevice` 是端口图基类，不应单独前向；它的 `named/connect/connect_inputs/connect_outputs` 用法见第 5 节。
+
+```python
+import torch
+from optosimlab import *
+
+grid = SimulationGrid(100e9)
+field = torch.ones(100, dtype=torch.complex64) * 0.01
+voltage = torch.linspace(-1, 1, 100)
+wdm = field.repeat(3, 1)                       # (channels, samples)
+
+# 分束、耦合和全部 MZM
+splitter = PowerSplitter1x2(0.5, insertion_loss_db=0.2)
+through, cross = splitter(field)
+coupler = DirectionalCoupler2x2(0.5)
+out0, out1 = coupler(through, cross)
+bar, cross = DifferentialDualPortMZM(v_pi=1.0)(field, voltage)
+out0, out1 = FourPortMZM(v_pi=1.0)(field, field, voltage)
+y_ideal = IdealMZM(v_pi=1.0)(field, voltage)
+y_practical = PracticalMZM(insertion_loss_db=3, extinction_ratio_db=20)(field, voltage)
+y_alias = MachZehnderModulator()(field, voltage)
+measured = MeasuredMZM(
+    torch.tensor([-1.0, 0.0, 1.0]),
+    torch.tensor([0.0, 0.5, 1.0]),
+)
+y_measured = measured(field, voltage)
+y_filtered = MZMWithElectricalFilter(grid, cutoff_hz=20e9)(field, voltage)
+y_intensity = IntensityMZM()(field, voltage)
+y_activation = IntensityMZMActivation()(torch.randn(8, 16))
+
+# 光源、传输、频域器件、噪声和探测
+comb = OpticalFrequencyComb(grid, 10e9, 3, line_powers=1e-3)
+comb_field = comb(100)
+eoc = ElectroOpticComb(grid, 10e9, modulation_indices_rad=0.8)
+eoc_field = eoc(field)
+practical_eoc = PracticalElectroOpticComb(
+    grid, 10e9, rf_bandwidth_hz=20e9,
+    rf_phase_noise_diffusion_rad2_per_s=1e3,
+)
+practical_eoc_field = practical_eoc(field)
+filtered = FrequencyDomainLowPass(grid, cutoff_hz=20e9, order=2)(field)
+fiber_out = LinearDispersiveFiber(grid, 1000, dispersion_ps_nm_km=17)(field)
+shaped = WaveShaper(grid, control_points=17)(field)
+attenuated = OpticalAttenuator(3.0)(field)
+noisy = AdditiveComplexGaussianNoise(sigma=1e-5)(field)
+power_w = PhotodetectorSum()(wdm)
+noisy_power_w = NoisyPhotodetectorSum(noise_std_w=1e-6)(wdm)
+balanced_w = BalancedPhotodetector()(wdm, 0.5 * wdm)
+
+# 三种 EDFA；新实验优先使用 GainControlledEDFA
+amplified = GainControlledEDFA(grid, gain_db=20)(field)
+small_signal = SmallSignalEDFA(grid, pump_current_ma=100)(field)
+saturated = SaturatedNoisyEDFA(grid, saturation_power=1e-3)(field)
+
+# 串行/图式组合和卷积模块
+serial = OpticalChain(OpticalAttenuator(1.0), OpticalAttenuator(2.0))
+serial_out = serial(field)
+real_conv = PhotonicRealConvolution(torch.tensor([0.2, 0.5, 0.8]))
+real_y = real_conv(torch.rand(4, 256))
+signed_conv = DifferentialPhotonicConvolution(
+    torch.tensor([-0.2, 0.5, 0.8]), differential_depth=0.8
+)
+signed_y = signed_conv(torch.rand(4, 256))
+complex_weights = torch.tensor([[[0.3+0.2j, -0.1+0.4j]]])
+bank = MZIComplexWeightBank(complex_weights)
+bank_y = bank(torch.ones(2, 1, 32, 2, dtype=torch.complex64))
+complex_conv = MZIComplexConv1d(complex_weights, tap_delay_samples=1)
+complex_y = complex_conv(torch.ones(2, 1, 256, dtype=torch.complex64))
+math_conv = ComplexConv1d(1, 2, 3, padding=1)
+math_y = math_conv(torch.ones(2, 1, 256, dtype=torch.complex64))
+fir = OverlapSaveFIR(torch.tensor([1+0j, 0.2-0.1j]), fft_size=64)
+fir_y = fir(field)
+
+# Issue #3 的混合光电 MNIST 模型
+mnist = PhotonicMNISTClassifier(mode="nonideal", activation="mzi", chunk_size=256)
+logits = mnist(torch.rand(8, 1, 28, 28))
+```
+
+所有带 `trainable=True` 的物理量都由 PyTorch 优化器管理。对含无源约束的光卷积、强度 MZI 或复 MZI 权重，必须在 `optimizer.step()` 后调用对应模型的 `project_physical_parameters_()`。
+
+## 10. 最小自检命令
 
 ```powershell
 # 在仓库根目录执行
@@ -285,4 +376,4 @@ python -m pytest -q -p no:cacheprovider tests
 python examples\train_mnist_photonic.py --synthetic-smoke --epochs 1
 ```
 
-CPU 环境预期为 `105 passed, 1 skipped`；跳过项仅是 CUDA 一致性测试。真实 MNIST 下载失败属于网络问题，不代表模型前向/反向测试失败。
+最终测试数量以仓库当前运行结果为准；跳过项仅应是无 CUDA 环境下的 GPU 一致性测试。真实 MNIST 下载失败属于网络问题，不代表模型前向/反向测试失败。

@@ -53,3 +53,49 @@ def test_projection_keeps_trainable_waveshaper_passive() -> None:
     layer.project_physical_parameters_()
     assert torch.all(layer.positive.waveshaper.attenuation_db >= 0)
     assert torch.all(layer.negative.waveshaper.attenuation_db >= 0)
+
+
+def test_differential_encoding_preserves_kernel_and_avoids_dead_branch_gradients() -> None:
+    weights = torch.tensor([-0.3, 0.0, 0.3])
+    layer = DifferentialPhotonicConvolution(weights)
+    assert torch.allclose(layer.effective_weights, weights, atol=2e-6, rtol=2e-6)
+    samples = torch.rand(8, 31)
+    layer(samples).square().mean().backward()
+    positive_grad = layer.positive.waveshaper.attenuation_db.grad
+    negative_grad = layer.negative.waveshaper.attenuation_db.grad
+    assert positive_grad is not None and torch.all(positive_grad.abs() > 1e-8)
+    assert negative_grad is not None and torch.all(negative_grad.abs() > 1e-8)
+
+
+def test_differential_weight_can_cross_zero_during_optimisation() -> None:
+    layer = DifferentialPhotonicConvolution(torch.tensor([0.2]))
+    optimiser = torch.optim.Adam(layer.parameters(), lr=0.1)
+    target = torch.tensor([-0.2])
+    for _ in range(160):
+        optimiser.zero_grad()
+        (layer.effective_weights - target).square().sum().backward()
+        optimiser.step()
+        layer.project_physical_parameters_()
+    assert layer.effective_weights.item() < -0.1
+
+
+def test_all_zero_differential_kernel_keeps_trainable_scale() -> None:
+    layer = DifferentialPhotonicConvolution(torch.zeros(3))
+    assert torch.allclose(layer.effective_weights, torch.zeros(3), atol=2e-6)
+    target = torch.tensor([0.2, -0.1, 0.3])
+    (layer.effective_weights - target).square().sum().backward()
+    positive_grad = layer.positive.waveshaper.attenuation_db.grad
+    negative_grad = layer.negative.waveshaper.attenuation_db.grad
+    assert positive_grad is not None and torch.all(positive_grad.abs() > 1e-5)
+    assert negative_grad is not None and torch.all(negative_grad.abs() > 1e-5)
+
+
+def test_iter_chunked_can_be_consumed_one_chunk_at_a_time() -> None:
+    layer = DifferentialPhotonicConvolution(torch.tensor([-0.2, 0.4]))
+    samples = torch.rand(2, 37, requires_grad=True)
+    detached_outputs = []
+    for chunk in layer.iter_chunked(samples, 9):
+        detached_outputs.append(chunk.detach())
+        chunk.square().mean().backward()
+    assert torch.allclose(torch.cat(detached_outputs, dim=-1), layer(samples), atol=3e-6, rtol=3e-6)
+    assert samples.grad is not None and torch.all(torch.isfinite(samples.grad))

@@ -1,4 +1,4 @@
-"""Internal validation helpers shared by optical devices."""
+"""光学器件共享的内部校验与图连接工具。"""
 
 from __future__ import annotations
 
@@ -7,11 +7,10 @@ from torch import Tensor, nn
 
 
 class GraphDevice(nn.Module):
-    """Base class for devices that can be wired into an OpticalChain graph.
+    """能够接入 OpticalChain 图的器件基类。
 
-    Connections are topology metadata only and are deliberately stored outside
-    PyTorch's child-module registry.  OpticalChain.from_device_graph registers
-    each reachable device exactly once.
+    连接仅作为拓扑元数据保存，刻意不写入 PyTorch 子模块注册表。
+    ``OpticalChain.from_device_graph`` 会且只会注册每个可达器件一次。
     """
 
     graph_input_ports: tuple[str, ...] = ("input",)
@@ -40,7 +39,7 @@ class GraphDevice(nn.Module):
         return self.__dict__.get("_graph_name", self.__class__.__name__)
 
     def named(self, name: str) -> "GraphDevice":
-        """Assign a stable graph name and return self for fluent construction."""
+        """设置稳定的图节点名称，并返回自身以支持链式构建。"""
         if not isinstance(name, str) or not name or "." in name:
             raise ValueError("graph name must be non-empty and contain no dots")
         self.__dict__["_graph_name"] = name
@@ -53,9 +52,9 @@ class GraphDevice(nn.Module):
         output_port: int | str = 0,
         input_port: int | str = 0,
     ) -> "GraphDevice | None":
-        """Connect one output port to one target input port.
+        """把一个输出端口连接到目标器件的一个输入端口。
 
-        None is accepted so optional branches can be left unconnected.
+        允许传入 ``None``，以便让可选分支保持未连接状态。
         """
         if target is None:
             return None
@@ -73,7 +72,7 @@ class GraphDevice(nn.Module):
         return target
 
     def connect_outputs(self, *targets: "GraphDevice | None") -> "GraphDevice":
-        """Connect output ports in order; omitted or None targets remain open."""
+        """按顺序连接输出端口；省略或为 None 的目标保持悬空。"""
         if len(targets) > len(self.graph_output_ports):
             raise ValueError("too many targets for this device")
         for output_index, target in enumerate(targets):
@@ -84,7 +83,7 @@ class GraphDevice(nn.Module):
         self,
         *sources: "GraphDevice | tuple[GraphDevice, int | str] | None",
     ) -> "GraphDevice":
-        """Connect input ports in order from devices or (device, output_port)."""
+        """按顺序从器件或 ``(器件, 输出端口)`` 连接输入端口。"""
         if len(sources) > len(self.graph_input_ports):
             raise ValueError("too many sources for this device")
         for input_index, source in enumerate(sources):
@@ -101,7 +100,7 @@ class GraphDevice(nn.Module):
 
 
 def require_complex_field(field: Tensor) -> None:
-    """Reject ambiguous real-valued optical fields at the module boundary."""
+    """在模块边界拒绝语义含糊的实数光场。"""
     if not isinstance(field, Tensor):
         raise TypeError("field must be a torch.Tensor")
     if not torch.is_complex(field):
@@ -111,7 +110,7 @@ def require_complex_field(field: Tensor) -> None:
 
 
 def nonnegative_parameter(value: Tensor, name: str, *, floor: float = 0.0) -> Tensor:
-    """Validate a physical parameter while preserving its autograd connection."""
+    """在保留 autograd 连接的同时校验非负物理参数。"""
     if torch.any(value.detach() < 0):
         raise ValueError(f"{name} must not be negative")
     return value.clamp_min(floor)

@@ -1,4 +1,4 @@
-"""Electro-optic comb with first-order RF response and phase diffusion."""
+"""含 RF 一阶响应与相位扩散的实际电光梳。"""
 
 from __future__ import annotations
 
@@ -11,16 +11,13 @@ from .electro_optic_comb import ElectroOpticComb
 
 
 class PracticalElectroOpticComb(ElectroOpticComb):
-    """EO comb with causal RF bandwidth and Wiener RF phase noise.
+    """含因果 RF 带宽与 Wiener RF 相位噪声的电光梳。
 
-    Each stage uses a first-order electrical transfer function
-    ``H_rf(f) = 1 / (1 + j f / f_c)``.  Consequently the ideal modulation
-    index is multiplied by ``|H_rf|`` and its RF phase receives
-    ``arg(H_rf) = -atan(f / f_c)``.  The optional phase-noise process is a
-    Wiener random walk: ``phi_noise[n+1]-phi_noise[n] ~ N(0, D_phi dt)``.
-    ``D_phi`` has units rad^2/s and is trainable.  This model does not claim to
-    reproduce an RF oscillator's detailed phase-noise mask; it supplies a
-    controlled, physically dimensioned diffusion approximation.
+    每一级采用一阶电响应 ``H_rf(f)=1/(1+jf/f_c)``，因此理想调制指数乘以
+    ``|H_rf|``，RF 相位附加 ``arg(H_rf)=-atan(f/f_c)``。可选相噪使用
+    Wiener 随机游走：``phi_noise[n+1]-phi_noise[n] ~ N(0,D_phi*dt)``。
+    ``D_phi`` 的单位为 rad^2/s 且可训练。该模型提供量纲明确、可控制的
+    扩散近似，不宣称复现 RF 振荡器的完整相噪谱模板。
     """
 
     def __init__(
@@ -63,14 +60,14 @@ class PracticalElectroOpticComb(ElectroOpticComb):
         return vector
 
     def rf_amplitude_and_phase(self, *, device: torch.device, dtype: torch.dtype) -> tuple[Tensor, Tensor]:
-        """Return per-stage first-order RF amplitude and phase response."""
+        """返回每一级 RF 一阶幅度和相位响应。"""
         bandwidth = nonnegative_parameter(self.rf_bandwidth_hz, "rf_bandwidth_hz", floor=torch.finfo(dtype).eps).to(device=device, dtype=dtype)
         frequency = self.modulation_frequencies_hz.to(device=device, dtype=dtype)
         ratio = frequency / bandwidth
         return torch.rsqrt(1.0 + ratio.square()), -torch.atan(ratio)
 
     def phase_noise(self, samples: int, *, device: torch.device, dtype: torch.dtype, generator: torch.Generator | None = None) -> Tensor:
-        """Sample per-stage Wiener phase trajectories, with zero initial phase."""
+        """采样各级 Wiener 相位轨迹，并令初始相位为零。"""
         if not self.enable_phase_noise:
             return torch.zeros((self.stage_count, samples), device=device, dtype=dtype)
         diffusion = nonnegative_parameter(
@@ -89,7 +86,7 @@ class PracticalElectroOpticComb(ElectroOpticComb):
         real_dtype: torch.dtype,
         generator: torch.Generator | None = None,
     ) -> Tensor:
-        """Return field transmission including RF bandwidth and phase diffusion."""
+        """返回包含 RF 带宽和相位扩散的场传输。"""
         self.frequency_bin_indices(samples)
         t = torch.arange(samples, device=device, dtype=real_dtype) / self.grid.sample_rate_hz
         frequencies = self.modulation_frequencies_hz.to(device=device, dtype=real_dtype)
@@ -107,7 +104,7 @@ class PracticalElectroOpticComb(ElectroOpticComb):
         return torch.polar(amplitude_loss.expand_as(phase), phase)
 
     def forward(self, field: Tensor, *, generator: torch.Generator | None = None) -> Tensor:
-        """Apply RF-limited, optionally phase-noisy EO modulation to ``field``."""
+        """对 ``field`` 施加受 RF 带宽限制且可选带相噪的电光调制。"""
         require_complex_field(field)
         transfer = self.field_transmission(
             field.shape[-1],

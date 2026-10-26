@@ -1,4 +1,4 @@
-"""Sequential and directed-acyclic optical processing networks."""
+"""串行与有向无环图形式的光学处理网络。"""
 
 from __future__ import annotations
 
@@ -11,21 +11,20 @@ from ..devices.base import GraphDevice
 
 
 class OpticalChain(nn.Module):
-    """Compose serial devices or an explicitly wired feed-forward graph.
+    """组合串行器件或显式连线的前馈图。
 
-    The ordinary constructor preserves the v0.7 sequential API.  Use
-    OpticalChain.from_graph for fan-out, parallel branches, multiple inputs and
-    multiple outputs.  Graph nodes are executed in the supplied topological
-    order and have the form (name, module, input_names, output_names).
+    普通构造器保留 v0.7 的串行 API。需要扇出、并行分支、多输入或多输出时，
+    使用 ``OpticalChain.from_graph``。图节点按给定拓扑顺序执行，节点格式为
+    ``(名称, 模块, 输入名, 输出名)``。
     """
 
     def __init__(self, *devices: nn.Module | Iterable[nn.Module]) -> None:
         super().__init__()
         if len(devices) == 1 and not isinstance(devices[0], nn.Module):
-            devices = tuple(devices[0])  # type: ignore[assignment]
+            devices = tuple(devices[0])  # 类型检查器无法推断运行时展平结果
         if not all(isinstance(device, nn.Module) for device in devices):
             raise TypeError("all OpticalChain entries must be torch.nn.Module instances")
-        self.devices = nn.ModuleList(devices)  # type: ignore[arg-type]
+        self.devices = nn.ModuleList(devices)  # 已在上方校验全部元素为 nn.Module
         self.graph_devices = nn.ModuleDict()
         self._graph_specs: list[tuple[str, tuple[str, ...], tuple[str, ...]]] = []
         self._graph_outputs: tuple[str, ...] = ()
@@ -48,7 +47,7 @@ class OpticalChain(nn.Module):
         nodes: Sequence[tuple[str, nn.Module, str | Sequence[str], str | Sequence[str]]],
         outputs: str | Sequence[str],
     ) -> "OpticalChain":
-        """Build a graph from nodes already listed in topological order."""
+        """根据已按拓扑顺序排列的节点构建图。"""
         chain = cls()
         seen_nodes: set[str] = set()
         produced_values: set[str] = set()
@@ -77,11 +76,10 @@ class OpticalChain(nn.Module):
         *,
         outputs: Sequence[GraphDevice | tuple[GraphDevice, int | str]] | None = None,
     ) -> "OpticalChain":
-        """Build a chain by following connections declared on devices.
+        """沿器件上声明的连接自动构建链路图。
 
-        Any device in the connected component may be supplied as a seed.  The
-        method walks both upstream and downstream, checks for cycles, registers
-        every module once, and discovers unconnected graph inputs/outputs.
+        连通分量中的任一器件都可作为种子。本方法遍历其上下游、检查环路、
+        仅注册每个模块一次，并自动发现未连接的图输入与图输出。
         """
         seeds = (devices,) if isinstance(devices, GraphDevice) else tuple(devices)
         if not seeds or not all(isinstance(device, GraphDevice) for device in seeds):

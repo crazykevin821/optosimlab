@@ -120,4 +120,6 @@ class PhotonicMNISTClassifier(nn.Module):
     def project_physical_parameters_(self) -> "PhotonicMNISTClassifier":
         """在 ``optimizer.step()`` 后投影无源器件参数。"""
         self.optical_convolution.project_physical_parameters_()
+        if isinstance(self.activation, IntensityMZMActivation):
+            self.activation.project_physical_parameters_()
         return self

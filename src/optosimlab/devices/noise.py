@@ -1,4 +1,4 @@
-"""Loss and noise primitives for non-ideal optical system simulations."""
+"""非理想光学系统仿真的损耗与噪声基础器件。"""
 
 from __future__ import annotations
 
@@ -9,7 +9,7 @@ from .base import GraphDevice, nonnegative_parameter, require_complex_field
 
 
 class OpticalAttenuator(GraphDevice):
-    """Power attenuator with a non-negative attenuation in dB."""
+    """衰减量非负、单位为功率 dB 的光衰减器。"""
 
     def __init__(self, attenuation_db: float = 0.0, *, trainable: bool = False) -> None:
         super().__init__()
@@ -25,10 +25,10 @@ class OpticalAttenuator(GraphDevice):
 
 
 class AdditiveComplexGaussianNoise(GraphDevice):
-    """Add circular complex Gaussian field noise with RMS field value ``sigma``.
+    """加入复圆对称高斯场噪声，场 RMS 为 ``sigma``。
 
-    Real and imaginary quadratures each have variance ``sigma**2 / 2``. Thus
-    the expected total noise power is ``E[|n|^2] = sigma**2``.
+    实、虚正交分量的方差均为 ``sigma**2/2``，故期望总噪声功率满足
+    ``E[|n|^2] = sigma**2``。
     """
 
     def __init__(self, sigma: float = 0.0, *, trainable: bool = False) -> None:

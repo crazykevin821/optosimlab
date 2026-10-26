@@ -1,4 +1,4 @@
-"""Linear dispersive single-mode fibre model."""
+"""线性色散单模光纤模型。"""
 
 from __future__ import annotations
 
@@ -12,13 +12,13 @@ from .base import GraphDevice, nonnegative_parameter, require_complex_field
 
 
 class LinearDispersiveFiber(GraphDevice):
-    """Frequency-domain fibre with power attenuation and second-order dispersion.
+    """含功率衰减和二阶色散的频域光纤。
 
-    In this package, forward FFT uses ``exp(-j 2 pi f t)`` and inverse FFT
-    uses ``exp(+j 2 pi f t)``. After removing beta0 and beta1, propagation is
-    therefore ``H(f) = exp(-alpha_power L / 2) exp(+j beta2 (2 pi f)^2 L / 2)``.
-    ``alpha_power`` is in nepers/m and ``beta2`` is in s^2/m.  The attenuation
-    argument is specified in dB/km as a *power* loss, not field loss.
+    本包的正向 FFT 采用 ``exp(-j2*pi*f*t)``，逆 FFT 采用
+    ``exp(+j2*pi*f*t)``。去除 beta0 与 beta1 后，传播为
+    ``H(f)=exp(-alpha_power*L/2) exp(+j*beta2*(2*pi*f)^2*L/2)``。
+    ``alpha_power`` 单位为 Np/m，``beta2`` 单位为 s^2/m；传入的
+    dB/km 是功率损耗而不是场幅损耗。
     """
 
     def __init__(
@@ -47,7 +47,7 @@ class LinearDispersiveFiber(GraphDevice):
 
     @staticmethod
     def beta2_from_dispersion(dispersion_ps_nm_km: float, wavelength_m: float) -> float:
-        """Convert D [ps/(nm km)] to beta2 [s^2/m]."""
+        """把 D [ps/(nm km)] 换算为 beta2 [s^2/m]。"""
         if wavelength_m <= 0:
             raise ValueError("wavelength_m must be positive")
         d_s_per_m2 = dispersion_ps_nm_km * 1e-6
@@ -55,7 +55,7 @@ class LinearDispersiveFiber(GraphDevice):
 
     @staticmethod
     def dispersion_from_beta2(beta2_s2_per_m: float, wavelength_m: float) -> float:
-        """Convert beta2 [s^2/m] to D [ps/(nm km)]."""
+        """把 beta2 [s^2/m] 换算为 D [ps/(nm km)]。"""
         if wavelength_m <= 0:
             raise ValueError("wavelength_m must be positive")
         return -2.0 * math.pi * C_LIGHT * beta2_s2_per_m / wavelength_m**2 / 1e-6
@@ -66,7 +66,7 @@ class LinearDispersiveFiber(GraphDevice):
         beta2 = self.beta2_s2_per_m.to(device=device, dtype=dtype)
         frequency = self.grid.frequencies_hz(samples, device=device).to(dtype=dtype)
         omega = 2.0 * torch.pi * frequency
-        # dB/km -> Np/m for power. Field amplitude receives half the exponent.
+        # 功率由 dB/km 换算为 Np/m；场幅度使用一半指数。
         alpha_power_np_per_m = attenuation_db * (math.log(10.0) / 10.0) / 1000.0
         log_amplitude = -0.5 * alpha_power_np_per_m * length
         phase = 0.5 * beta2 * omega.square() * length
@@ -81,15 +81,13 @@ class LinearDispersiveFiber(GraphDevice):
         dtype: torch.dtype,
         reference_offset_hz: Tensor | float | None = None,
     ) -> Tensor:
-        """Return narrowband WDM transfer with wavelength-dependent delay.
+        """返回含波长相关延时的窄带 WDM 传输。
 
-        Expanding the fibre phase around carrier offset f_k gives the baseband
-        linear term beta2*L*(2*pi*f_k)*(2*pi*f).  A common group delay is
-        removed by referencing the first (or supplied) carrier.  The resulting
-        adjacent-channel delay is -beta2*L*2*pi*Delta_f under this package's
-        FFT sign convention.  This method intentionally omits the common
-        intra-channel quadratic term so it models the progressive-delay regime
-        used by transversal photonic processors.
+        在载波频偏 ``f_k`` 处展开光纤相位，可得基带线性项
+        ``beta2*L*(2*pi*f_k)*(2*pi*f)``。以第一个或指定载波为参考移除公共
+        群时延；在本包 FFT 符号约定下，相邻通道时延为
+        ``-beta2*L*2*pi*Delta_f``。这里有意省略各通道共有的二次项，
+        用来表示横向光子处理器所需的渐进延时工作区。
         """
         if samples <= 0:
             raise ValueError("samples must be positive")
@@ -110,17 +108,17 @@ class LinearDispersiveFiber(GraphDevice):
         return torch.exp(torch.complex(log_amplitude.expand_as(phase), phase))
 
     def adjacent_channel_delay_s(self, line_spacing_hz: float) -> Tensor:
-        """Return group-delay increment between increasing-frequency channels."""
+        """返回频率递增相邻通道之间的群时延增量。"""
         if line_spacing_hz <= 0:
             raise ValueError("line_spacing_hz must be positive")
         return -self.beta2_s2_per_m * self.length_m * (2.0 * math.pi * line_spacing_hz)
 
     def power_transmission(self, reference: Tensor) -> Tensor:
-        """Return the fibre's wavelength-independent power transmission.
+        """返回光纤与波长无关的公共功率透射率。
 
-        ``attenuation_db_per_km`` is a power loss and ``length_m`` is converted
-        to kilometres, so the result is ``10**(-alpha_db_per_km*L_km/10)``.
-        The scalar retains autograd connections to trainable fibre parameters.
+        ``attenuation_db_per_km`` 是功率损耗，``length_m`` 会换算为 km，故
+        结果为 ``10**(-alpha_db_per_km*L_km/10)``。返回标量保留与可训练
+        光纤参数之间的 autograd 连接。
         """
         if not isinstance(reference, Tensor) or torch.is_complex(reference) or not reference.is_floating_point():
             raise TypeError("reference must be a real floating-point torch.Tensor")

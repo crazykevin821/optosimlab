@@ -1,4 +1,4 @@
-"""Time-domain electro-optic frequency-comb model."""
+"""时域电光频率梳模型。"""
 
 from __future__ import annotations
 
@@ -12,20 +12,17 @@ from .base import GraphDevice, nonnegative_parameter, require_complex_field
 
 
 class ElectroOpticComb(GraphDevice):
-    """Cascade ideal phase modulators driven by phase-coherent RF tones.
+    """级联由相干 RF 音调驱动的理想相位调制器。
 
-    Each stage applies the lossless phase-modulation transfer function
+    每一级施加无损相位调制传递函数
 
     ``E_out(t) = E_in(t) exp(j * beta * sin(2 pi f_rf t + phi_rf))``.
 
-    For a continuous-wave input, the Jacobi-Anger expansion produces comb
-    teeth with complex amplitudes ``J_n(beta) exp(j n phi_rf)`` at offsets
-    ``n * f_rf``.  The stage transfer has unit magnitude, so cascading stages
-    does not change optical power before the optional *total* insertion loss.
-    RF frequencies are deliberately structural values rather than parameters:
-    they must be integer FFT bins for the finite record to represent a periodic
-    comb without spectral leakage.  Modulation indices, RF phases and loss are
-    registered ``nn.Parameter`` instances for optimisation.
+    对连续波输入，Jacobi--Anger 展开会在 ``n*f_rf`` 频偏处产生复幅为
+    ``J_n(beta)*exp(j*n*phi_rf)`` 的梳齿。每一级传递函数的模为一，故级联
+    不改变可选总插损之前的光功率。RF 频率刻意作为结构值而不是参数保存：
+    它必须落在整数 FFT 频点上，有限记录才能无泄漏地表示周期光梳。
+    调制指数、RF 相位和插损均注册为可优化的 ``nn.Parameter``。
     """
 
     def __init__(
@@ -69,11 +66,11 @@ class ElectroOpticComb(GraphDevice):
 
     @property
     def stage_count(self) -> int:
-        """Number of cascaded RF phase-modulation stages."""
+        """级联 RF 相位调制级数。"""
         return int(self.modulation_indices_rad.numel())
 
     def frequency_bin_indices(self, samples: int) -> Tensor:
-        """Validate record-periodic RF tones and return their positive FFT bins."""
+        """校验 RF 音调与记录周期对齐，并返回其正频 FFT 索引。"""
         if samples <= 1:
             raise ValueError("samples must be greater than one")
         bins = self.modulation_frequencies_hz * samples / self.grid.sample_rate_hz
@@ -88,7 +85,7 @@ class ElectroOpticComb(GraphDevice):
         return rounded.to(dtype=torch.long)
 
     def field_transmission(self, samples: int, *, device: torch.device, real_dtype: torch.dtype) -> Tensor:
-        """Return the total complex field transfer over one finite record."""
+        """返回一个有限记录内的总复场传输。"""
         bins = self.frequency_bin_indices(samples).to(device=device)
         t = torch.arange(samples, device=device, dtype=real_dtype) / self.grid.sample_rate_hz
         frequencies = self.modulation_frequencies_hz.to(device=device, dtype=real_dtype)
@@ -100,7 +97,7 @@ class ElectroOpticComb(GraphDevice):
         return torch.polar(amplitude_loss.expand_as(phase), phase)
 
     def forward(self, field: Tensor) -> Tensor:
-        """Phase-modulate a complex envelope along its final sample dimension."""
+        """沿最后一个样本维对复包络进行相位调制。"""
         require_complex_field(field)
         transfer = self.field_transmission(field.shape[-1], device=field.device, real_dtype=field.real.dtype)
         return field * transfer

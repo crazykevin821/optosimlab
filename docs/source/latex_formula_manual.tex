@@ -29,8 +29,8 @@ xleftmargin=0.5em,xrightmargin=0.5em,aboveskip=0.7em,belowskip=0.7em}
 
 \title{\textcolor{navy}{\Huge OptoSimLab}\\[0.6em]
 \textcolor{teal}{\Large 使用说明与公式自检记录}}
-\author{版本 0.10.0 \quad 可移植安装与使用手册}
-\date{2026-10-18}
+\author{版本 0.10.1 \quad 可移植安装与使用手册}
+\date{2026-10-26}
 
 \begin{document}
 \maketitle
@@ -75,7 +75,7 @@ OptoSimLab 是基于 PyTorch 的\textbf{复包络、信号级、可微分}光学
 python -m pytest -q -p no:cacheprovider tests
 python examples\train_mzm_bias.py
 \end{lstlisting}
-当前 Windows CPU 环境的验收结果是：\textbf{105 项通过，1 项跳过}。跳过项是 CPU/CUDA 一致性测试，因为当前 PyTorch 不带 CUDA；这不是测试失败。
+当前 Windows CPU 环境的验收结果是：\textbf{113 项通过，1 项跳过}。跳过项是 CPU/CUDA 一致性测试，因为当前 PyTorch 不带 CUDA；这不是测试失败。
 
 \subsection{从零安装}
 \begin{lstlisting}[language=bash]
@@ -92,7 +92,7 @@ python -m pytest -q -p no:cacheprovider tests
 \begin{lstlisting}[language=bash]
 # Run in the repository root
 .\.venv\Scripts\Activate.ps1
-python -m pip install --force-reinstall --no-deps .\dist\optosimlab-0.10.0-py3-none-any.whl
+python -m pip install --force-reinstall --no-deps .\dist\optosimlab-0.10.1-py3-none-any.whl
 python -c "from optosimlab import PhotonicRealConvolution; print('import OK')"
 \end{lstlisting}
 
@@ -161,7 +161,7 @@ E_{\mathrm{out}}&=E_{\mathrm{in}}\sqrt{T(V)}\exp[\mathrm{j}\phi(V)].
 \end{align}
 CSV 默认列为 \pkg{voltage\_v,power\_transmission}，可选列为 \pkg{phase\_rad}。钳位是为了避免对未测区域作无依据外推，不代表真实器件在范围外恒定。
 
-常见的无符号强度调制不应与差分双输出结构混用。v0.10 新增独立的 \pkg{IntensityMZM}：
+常见的无符号强度调制不应与差分双输出结构混用。本项目使用独立的 \pkg{IntensityMZM}：
 \begin{equation}
 T_{\mathrm I}(V)=\eta\left[\epsilon+(1-\epsilon)
 \cos^2\!\left(\frac{\pi(V+V_{\mathrm{bias}})}{2V_\pi}\right)\right],
@@ -328,7 +328,16 @@ y[n]=\frac{P_{\mathrm{det}}[n]-A_{\mathrm f}P_{\mathrm{line}}T_{\min}\sum_kw_k}
 \end{equation}
 逐点等于零初始状态的因果实卷积。默认理想 MZM 有 $T_{\min}=0,T_{\max}=1$；实际或实测 MZM 则自动扣除消光泄漏底值并按真实调制摆幅归一化。\pkg{detected\_power\_w()} 始终返回未扣底、包含光纤损耗的真实探测功率。v0.9.1 的专项修复确保 $A_{\mathrm f}$ 同时进入泄漏基线和调制摆幅，避免有损光纤下产生比例误差或直流偏置。探测器“先按通道求功率再相加”等效于其电带宽低于梳齿间隔，因而滤除通道间拍频。单个无源 WaveShaper 支路只能给出同号权重。
 
-有符号卷积使用 \pkg{DifferentialPhotonicConvolution}，将正、负权重分到两个探测支路后作差。
+有符号卷积由 \pkg{DifferentialPhotonicConvolution} 实现。该模块使用两条
+平衡探测支路。令
+$s=\max(1,\max_k|w_k|)$，差分深度 $0<d<1$，则两条无源 WaveShaper 支路初始化为
+\begin{align}
+p_k^+&=\frac{1}{2}\left(1+d\frac{w_k}{s}\right), &
+p_k^-&=\frac{1}{2}\left(1-d\frac{w_k}{s}\right),\\
+\hat w_k&=\frac{s}{d}(p_k^+-p_k^-)=w_k.
+\end{align}
+尺度下限 1 避免全零或极小初始核的动态范围与梯度被压扁。默认 $d=0.8$，故 $p_k^\pm\in[0.1,0.9]$。两支路均远离零透射率，避免把
+$w_k=0$ 写成两个全灭支路造成梯度消失，并使训练后的有效权重可以跨越零点。
 
 \begin{lstlisting}[language=Python]
 import torch
@@ -349,19 +358,20 @@ assert torch.allclose(p_w, 1e-3 * y, atol=1e-9)
 \begin{equation}
 H=(K-1)D,
 \end{equation}
-其中 $K$ 是抽头数、$D$ 是相邻抽头的样本延时。\pkg{forward\_chunked(x,C)} 在每个长度为 $C$ 的块前保留 $H$ 个历史样本，记录起点不足部分补零，再只取当前块对应输出。因而它不是把各块当作独立记录，其输出和梯度都与整段因果卷积一致。
+其中 $K$ 是抽头数、$D$ 是相邻抽头的样本延时。\pkg{forward\_chunked(x,C)} 在每个长度为 $C$ 的块前保留 $H$ 个历史样本，记录起点不足部分补零，再只取当前块对应输出。因而它不是把各块当作独立记录，其输出和梯度都与整段因果卷积一致。\pkg{forward\_chunked} 最终仍会拼接完整输出；若训练时需要限制峰值内存，应遍历 \pkg{iter\_chunked}，对每块立即反向传播并只保存脱离计算图的统计量。
 
 \begin{lstlisting}[language=Python]
 x = torch.rand(32, 4, 1_000_000)
 conv = DifferentialPhotonicConvolution(
-    torch.tensor([-0.2, 0.5, 0.8]))
-y = conv.forward_chunked(x, chunk_size=65_536)
-loss = y.square().mean()
-loss.backward()
+    torch.tensor([-0.2, 0.5, 0.8]), differential_depth=0.8)
+optimizer = torch.optim.Adam(conv.parameters(), lr=1e-3)
+optimizer.zero_grad()
+for y_chunk in conv.iter_chunked(x, chunk_size=65_536):
+    (y_chunk.square().sum() / x.numel()).backward()
 optimizer.step()
 conv.project_physical_parameters_()
 \end{lstlisting}
-最后一步将无源 WaveShaper 的衰减投影回非负区间，防止普通优化器一步越过物理边界。
+最后一步将无源 WaveShaper 的衰减投影回非负区间，防止普通优化器一步越过物理边界。自动测试同时验证两支路梯度非零以及权重能从正值训练到负值。
 
 \subsection{MZI 相干复值光学卷积}
 参考 Nature Communications 12, 457 (2021) 的 MZI 复权重网络，\pkg{MZIComplexWeightBank} 对每个输出行先作二范数标定 $s_o$，再将归一化复系数写为
@@ -370,7 +380,11 @@ conv.project_physical_parameters_()
 \exp(\mathrm{j}\phi_{ock}),\qquad
 s_o=\left(\sum_{c,k}|w_{ock}|^2\right)^{1/2}.
 \end{equation}
-$\theta$ 是 MZI 内部相移，$\phi$ 是外部相移。归一化行可嵌入无源酉网络，$s_o$ 是已知读出标定；可选插损以场系数 $10^{-L/20}$ 作用，可选 \pkg{phase\_error\_std\_rad} 在每次前向加入相移误差。\pkg{MZIComplexConv1d} 对延时窗口内的复场做相干乘加：
+$\theta$ 是 MZI 内部相移，$\phi$ 是外部相移。归一化行可嵌入无源酉网络，$s_o$ 是已知读出标定；可选插损以场系数 $10^{-L/20}$ 作用，可选 \pkg{phase\_error\_std\_rad} 在每次前向加入相移误差。优化器更新后的物理投影先将负的 $\cos(\theta/2)$ 等价改写为正幅度和 $\phi+\pi$，再执行
+\begin{equation}
+\bm a_o\leftarrow\frac{\bm a_o}{\max(1,\lVert\bm a_o\rVert_2)},
+\end{equation}
+保证每个输出行归一化幅度的二范数不超过 1，同时把插损限制为非负。\pkg{MZIComplexConv1d} 对延时窗口内的复场做相干乘加：
 \begin{equation}
 y_o[n]=\sum_c\sum_{k=0}^{K-1}w_{ock}x_c[n-kD]+b_o.
 \end{equation}
@@ -406,6 +420,11 @@ python examples\train_mnist_photonic.py --mode ideal --activation mzi
 python examples\train_mnist_photonic.py --synthetic-smoke --epochs 1
 \end{lstlisting}
 真实数据使用相对目录 \pkg{data/}，命令不含任何开发者电脑的绝对路径。脚本内置 IDX 读取器，不强制安装 torchvision。
+
+固定随机种子下采用 4096 条训练样本、1024 条测试样本、CPU 和 2 个 epoch 的快速验收中，
+理想/ReLU、非理想/ReLU、理想/强度 MZI 三条路径的测试准确率分别为
+$77.83\%$、$78.32\%$ 和 $62.50\%$，且损失均下降。该小样本短训练只用于证明
+模型可训练、非理想项已实际进入计算，不作为完整 MNIST 精度基准。
 
 \subsection{最小可运行链路}
 \begin{lstlisting}[language=Python]
@@ -480,7 +499,7 @@ python -m pip wheel --no-deps --no-build-isolation --wheel-dir dist .
 python -c "from optosimlab import OverlapSaveFIR; print('package OK')"
 \end{lstlisting}
 \begin{tcolorbox}[colback=lightblue,colframe=teal,title=当前验收结果]
-版本 0.10.0 已完成源码编译、专项测试、最终全量测试、示例运行和 wheel 隔离导入。全量结果：\textbf{105 passed, 1 skipped}。无 CUDA 的 CPU 环境中该跳过项是预期行为；在 CUDA 环境中它会自动运行。
+版本 0.10.1 已完成源码编译、专项测试、最终全量测试、示例运行和 wheel 隔离导入。全量结果：\textbf{113 passed, 1 skipped}。无 CUDA 的 CPU 环境中该跳过项是预期行为；在 CUDA 环境中它会自动运行。
 \end{tcolorbox}
 
 \section{当前完成度、限制与后续实验标定}
@@ -492,7 +511,7 @@ python -c "from optosimlab import OverlapSaveFIR; print('package OK')"
 \item 论文路线的通道功率求和假定探测器带宽低于梳齿间隔；若接收机能看到拍频，必须改用全场平方后再建模电接收带宽。
 \end{enumerate}
 \begin{tcolorbox}[colback=lightblue,colframe=teal,title=结论]
-本平台已完成初始清单以及 Issue \#1、\#2 所要求的软件功能、PyTorch 封装、解析公式验证、回归测试、打包和说明文档。这里的“完成”是指模型与接口完成，不等于已替代实验：下一阶段应使用可追溯的真实器件数据做标定和系统级一致性验证。
+本平台已完成初始清单以及 Issue \#1、\#2、\#3 所要求的软件功能、PyTorch 封装、解析公式验证、回归测试、打包和说明文档。这里的“完成”是指模型与接口完成，不等于已替代实验：下一阶段应使用可追溯的真实器件数据做标定和系统级一致性验证。
 \end{tcolorbox}
 
 \section{参考文献}

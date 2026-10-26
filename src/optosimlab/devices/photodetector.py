@@ -1,4 +1,4 @@
-"""Square-law photodetector models for WDM optical fields."""
+"""用于 WDM 光场的平方律光电探测器模型。"""
 
 from __future__ import annotations
 
@@ -9,11 +9,10 @@ from .base import GraphDevice, nonnegative_parameter, require_complex_field
 
 
 class PhotodetectorSum(GraphDevice):
-    """Detect each WDM channel and sum optical power in watts.
+    """分别探测 WDM 通道并以 W 为单位求和光功率。
 
-    The model assumes electrical bandwidth below the comb spacing, so optical
-    inter-channel beat terms are rejected.  Responsivity is optional; the
-    default return value is power in W, while current_a() returns amperes.
+    模型假设电带宽低于光梳间隔，因此滤除光学通道间拍频项。默认返回
+    单位为 W 的功率；调用 ``current_a()`` 时才乘响应度并返回单位为 A 的电流。
     """
 
     def __init__(self, responsivity_a_per_w: float = 1.0, *, trainable: bool = False) -> None:
@@ -69,7 +68,7 @@ class NoisyPhotodetectorSum(PhotodetectorSum):
 
 
 class BalancedPhotodetector(GraphDevice):
-    """Subtract square-law powers from positive and negative WDM branches."""
+    """对正、负 WDM 支路的平方律探测功率作差。"""
 
     graph_input_ports = ("positive", "negative")
 

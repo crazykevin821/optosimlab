@@ -48,3 +48,26 @@ def test_mzi_complex_convolution_rejects_real_input() -> None:
         assert "complex" in str(error)
     else:
         raise AssertionError("real optical fields must be rejected")
+
+
+def test_mzi_complex_projection_enforces_passive_row_norm() -> None:
+    layer = MZIComplexConv1d(torch.ones(2, 2, 3, dtype=torch.complex64) * (0.1 + 0.2j))
+    with torch.no_grad():
+        layer.weight_bank.theta_rad.zero_()
+        layer.weight_bank.insertion_loss_db.fill_(-1.0)
+    layer.project_physical_parameters_()
+    normalized = layer.effective_weights / layer.weight_bank.weight_scale
+    row_norms = torch.linalg.vector_norm(normalized, dim=(1, 2))
+    assert torch.all(row_norms <= 1.0 + 2e-6)
+    assert layer.weight_bank.insertion_loss_db >= 0
+
+
+def test_chunked_complex_convolution_reuses_one_phase_error_sample() -> None:
+    weights = torch.tensor([[[0.3 + 0.2j, -0.1 + 0.4j]]])
+    layer = MZIComplexConv1d(weights, phase_error_std_rad=0.1)
+    field = torch.randn(2, 1, 31, dtype=torch.complex64)
+    torch.manual_seed(91)
+    expected = layer(field)
+    torch.manual_seed(91)
+    actual = layer.forward_chunked(field, 7)
+    assert torch.allclose(actual, expected, atol=2e-6, rtol=2e-6)

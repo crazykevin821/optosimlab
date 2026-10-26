@@ -1,4 +1,4 @@
-"""Metrics for validating signal-level optical simulations."""
+"""验证信号级光学仿真的系统指标。"""
 
 from __future__ import annotations
 
@@ -12,13 +12,13 @@ from .devices.base import require_complex_field
 
 
 def mean_power(field: Tensor) -> Tensor:
-    """Mean optical power in the simulation's field-squared units."""
+    """以场平方单位返回平均光功率。"""
     require_complex_field(field)
     return field.abs().square().mean()
 
 
 def normalized_mean_square_error(reference: Tensor, estimate: Tensor, *, eps: float = 1e-12) -> Tensor:
-    """NMSE = mean(|estimate-reference|^2) / mean(|reference|^2)."""
+    """返回 NMSE：估计误差均方除以参考信号均方。"""
     require_complex_field(reference)
     require_complex_field(estimate)
     if reference.shape != estimate.shape:
@@ -29,7 +29,7 @@ def normalized_mean_square_error(reference: Tensor, estimate: Tensor, *, eps: fl
 
 
 def snr_db(signal: Tensor, noise: Tensor, *, eps: float = 1e-20) -> Tensor:
-    """Power SNR in dB for separate complex signal and noise tensors."""
+    """根据独立的复信号与噪声张量计算功率信噪比 dB。"""
     require_complex_field(signal)
     require_complex_field(noise)
     if signal.shape != noise.shape:
@@ -39,7 +39,7 @@ def snr_db(signal: Tensor, noise: Tensor, *, eps: float = 1e-20) -> Tensor:
 
 
 def error_vector_magnitude(reference: Tensor, estimate: Tensor, *, eps: float = 1e-20) -> Tensor:
-    """Return RMS EVM as a unitless ratio for two complex envelopes."""
+    """返回两个复包络之间无量纲的 RMS EVM。"""
     require_complex_field(reference)
     require_complex_field(estimate)
     if reference.shape != estimate.shape:
@@ -48,11 +48,10 @@ def error_vector_magnitude(reference: Tensor, estimate: Tensor, *, eps: float = 
 
 
 def power_spectrum(field: Tensor) -> Tensor:
-    """Return fftshifted per-bin power contributions that sum to mean power.
+    """返回 fftshift 后逐频点功率，其总和等于平均功率。
 
-    With PyTorch's unnormalised FFT, each output bin is ``|X[k]|^2 / N^2``.
-    Summing across the final dimension therefore equals ``mean(|field|^2)`` by
-    Parseval's theorem.  Leading batch dimensions are preserved.
+    PyTorch 使用未归一化 FFT，因此每个输出频点为 ``|X[k]|^2/N^2``。
+    依据帕塞瓦尔定理，沿末维求和等于 ``mean(|field|^2)``，并保留前导批次维。
     """
     require_complex_field(field)
     samples = field.shape[-1]
@@ -61,16 +60,15 @@ def power_spectrum(field: Tensor) -> Tensor:
 
 
 def centered_frequency_axis_hz(grid: SimulationGrid, samples: int, *, device: torch.device | None = None) -> Tensor:
-    """Return the frequency axis aligned with :func:`power_spectrum`."""
+    """返回与 :func:`power_spectrum` 对齐的频率轴。"""
     return torch.fft.fftshift(grid.frequencies_hz(samples, device=device))
 
 
 def eye_diagram(signal: Tensor, samples_per_symbol: int, *, offset_samples: int = 0) -> Tensor:
-    """Fold a signal into overlapping two-symbol eye-diagram traces.
+    """把信号折叠为相邻两个符号长度的眼图轨迹。
 
-    The returned shape is ``signal.shape[:-1] + (traces, 2*samples_per_symbol)``.
-    Consecutive traces begin one symbol apart, so each UI participates in two
-    adjacent eye traces (except at the record boundaries).
+    返回形状为 ``signal.shape[:-1] + (轨迹数, 2*samples_per_symbol)``。
+    相邻轨迹相隔一个符号开始，因此除记录边界外，每个 UI 会参与两条相邻眼图轨迹。
     """
     if not isinstance(signal, Tensor) or signal.ndim < 1:
         raise TypeError("signal must be a torch.Tensor with a final sample dimension")
@@ -88,7 +86,7 @@ def eye_diagram(signal: Tensor, samples_per_symbol: int, *, offset_samples: int 
 
 
 def gaussian_q_factor(level_zero: Tensor, level_one: Tensor, *, eps: float = 1e-20) -> Tensor:
-    """Return binary Gaussian decision Q from two real-valued sample classes."""
+    """根据两类实数样本返回二元高斯判决 Q 因子。"""
     if not isinstance(level_zero, Tensor) or not isinstance(level_one, Tensor):
         raise TypeError("level_zero and level_one must be torch.Tensor instances")
     if torch.is_complex(level_zero) or torch.is_complex(level_one):
@@ -101,6 +99,6 @@ def gaussian_q_factor(level_zero: Tensor, level_one: Tensor, *, eps: float = 1e-
 
 
 def gaussian_ber_estimate(level_zero: Tensor, level_one: Tensor, *, eps: float = 1e-20) -> Tensor:
-    """Estimate equal-prior binary BER from a Gaussian Q-factor assumption."""
+    """在等先验高斯 Q 因子假设下估计二元 BER。"""
     q = gaussian_q_factor(level_zero, level_one, eps=eps)
     return 0.5 * torch.erfc(q / math.sqrt(2.0))

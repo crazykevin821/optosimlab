@@ -1,5 +1,14 @@
 # Changelog
 
+## 0.10.1 - 2026-10-26
+
+- Replaced clipped positive/negative kernel splitting with balanced differential encoding so both physical branches retain useful gradients and trainable weights can cross zero.
+- Added generator-based `iter_chunked()` execution for real, differential and MZI-complex convolution, allowing per-chunk backward passes without retaining every chunk graph.
+- Projected all trainable intensity-MZI parameters and passive MZI complex-weight rows back into their physically admissible domains after optimizer updates.
+- Corrected public API documentation parameter names and completed Chinese source documentation for the Issue #3 modules.
+- Added real-MNIST acceptance runs for ideal, explicitly nonideal and intensity-MZI activation paths, plus long-record streaming-gradient validation.
+- Regenerated the LaTeX manual, isolated wheel, and full verification record for Issue #3.
+
 ## 0.10.0 - 2026-10-18
 
 - Added exact chunked execution for long real and complex one-dimensional sequences while preserving causal history and PyTorch autograd.

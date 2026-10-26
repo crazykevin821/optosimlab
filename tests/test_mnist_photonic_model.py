@@ -45,3 +45,19 @@ def test_nonideal_mnist_model_declares_and_executes_nonidealities() -> None:
     result = model(torch.rand(2, 1, 4, 4))
     assert result.shape == (2, 10)
     assert torch.all(torch.isfinite(result))
+
+
+def test_mnist_mzi_activation_survives_repeated_optimizer_updates() -> None:
+    torch.manual_seed(23)
+    model = PhotonicMNISTClassifier(image_size=4, kernel_size=3, activation="mzi")
+    optimizer = torch.optim.Adam(model.parameters(), lr=2e-3)
+    images = torch.rand(16, 1, 4, 4)
+    labels = torch.randint(0, 10, (16,))
+    for _ in range(20):
+        optimizer.zero_grad()
+        loss = nn.CrossEntropyLoss()(model(images), labels)
+        loss.backward()
+        optimizer.step()
+        model.project_physical_parameters_()
+    assert torch.isfinite(loss)
+    assert model.activation.modulator.insertion_loss_db >= 0

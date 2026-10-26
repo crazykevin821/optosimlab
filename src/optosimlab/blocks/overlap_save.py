@@ -1,4 +1,4 @@
-"""Differentiable overlap-save filtering for long complex optical records."""
+"""用于长复光场记录的可微 overlap-save 滤波。"""
 
 from __future__ import annotations
 
@@ -9,14 +9,12 @@ from ..devices.base import require_complex_field
 
 
 class OverlapSaveFIR(nn.Module):
-    """Causal complex FIR using FFT overlap-save instead of circular convolution.
+    """使用 FFT overlap-save、避免循环卷积的因果复 FIR。
 
-    For a causal impulse response ``h[0:M]`` and block length ``N_fft``, each
-    block discards its first ``M-1`` IFFT samples and retains
-    ``N_fft-M+1`` samples.  The input is zero-padded on the left by ``M-1``;
-    therefore the returned record is exactly the first ``len(field)`` samples
-    of the linear convolution ``field * h`` with zero initial conditions.
-    ``impulse_response`` is an optionally trainable complex ``nn.Parameter``.
+    对因果冲激响应 ``h[0:M]`` 和块长 ``N_fft``，每块舍弃前 ``M-1`` 个
+    IFFT 样本并保留 ``N_fft-M+1`` 个样本。输入左侧补 ``M-1`` 个零，
+    因而返回结果严格等于零初始条件下线性卷积 ``field * h`` 的前
+    ``len(field)`` 个样本。``impulse_response`` 可选为可训练复参数。
     """
 
     def __init__(self, impulse_response: Tensor, fft_size: int, *, trainable: bool = False) -> None:
@@ -32,16 +30,16 @@ class OverlapSaveFIR(nn.Module):
 
     @property
     def impulse_length(self) -> int:
-        """Number of causal impulse-response taps."""
+        """因果冲激响应抽头数。"""
         return int(self.impulse_response.numel())
 
     @property
     def valid_samples_per_block(self) -> int:
-        """Non-corrupted output samples retained from each FFT block."""
+        """每个 FFT 块保留的无循环污染输出样本数。"""
         return self.fft_size - self.impulse_length + 1
 
     def frequency_response(self, *, device: torch.device | None = None, dtype: torch.dtype | None = None) -> Tensor:
-        """Return the unshifted FFT response evaluated at ``fft_size`` bins."""
+        """返回在 ``fft_size`` 个频点计算的未移位 FFT 响应。"""
         device = device or self.impulse_response.device
         if dtype is None:
             impulse = self.impulse_response.to(device=device)
@@ -51,7 +49,7 @@ class OverlapSaveFIR(nn.Module):
         return torch.fft.fft(impulse, n=self.fft_size)
 
     def forward(self, field: Tensor) -> Tensor:
-        """Filter a complex field on its final sample dimension using overlap-save."""
+        """沿复光场最后一维使用 overlap-save 进行滤波。"""
         require_complex_field(field)
         impulse = self.impulse_response.to(device=field.device, dtype=field.dtype)
         overlap = self.impulse_length - 1

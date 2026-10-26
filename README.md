@@ -9,7 +9,7 @@
 当前开发环境和基础模块已经验证可用：
 
 ```text
-105 passed, 1 skipped (CUDA unavailable)
+运行 `python -m pytest -q -p no:cacheprovider tests` 应全部通过；无 CUDA 时仅跳过 GPU 一致性测试。
 ```
 
 已完成：
@@ -76,7 +76,7 @@ p_detector_w = conv.detected_power_w(x) # 真实探测功率，单位 W
 assert torch.allclose(p_detector_w, 1e-3 * y, atol=1e-9)
 ```
 
-本模块的逐点定义是 `y[n] = Σ_k w[k] x[n-kD]`，记录开始前补零，不使用循环卷积。单个无源 WaveShaper 支路只能实现同号非负权重；有符号权重使用 `DifferentialPhotonicConvolution` 的正、负双探测支路相减。`ComplexConv1d` 只保留作数学神经网络兼容层，不再代表该物理系统。
+本模块的逐点定义是 `y[n] = Σ_k w[k] x[n-kD]`，记录开始前补零，不使用循环卷积。单个无源 WaveShaper 支路只能实现同号非负权重；有符号权重使用 `DifferentialPhotonicConvolution` 的两条平衡支路相减。令 `s=max(1,max(abs(w)))`、差分深度为 `d`，两路初值是 `p+=(1+d*w/s)/2` 和 `p-=(1-d*w/s)/2`，输出标定为 `(s/d)*(p+-p-)`，故严格恢复 `w`。尺度下限 1 避免全零或极小初始核的动态范围及梯度被压扁；默认 `d=0.8` 让两支路均远离零功率边界，使梯度不会在权重为零时死亡，并允许权重训练后跨过零点。`ComplexConv1d` 只保留作数学神经网络兼容层，不再代表该物理系统。
 
 若传入带非零衰减的自定义色散光纤，`detected_power_w()` 保留真实光纤功率损耗；校准后的 `forward()` 同时在泄漏基线和调制摆幅中计入 `fiber.power_transmission()`，因此仍返回同一个无量纲因果卷积。v0.9.1 增加了“有损光纤 + 有限消光比 MZM”的联合解析回归测试，防止物理功率与数值归一化再次混用。
 
@@ -111,7 +111,7 @@ output = graph(torch.ones(1024, dtype=torch.complex64))
 
 实测曲线在标定电压范围内分段线性插值，范围外钳位到端点；`power_transmission` 必须在 `[0,1]`。2×2 定向耦合器采用交叉端口带 `j` 相位的幺正矩阵。理想、实际、差分双输出和四光端口 MZM 全部集中在 `devices/mzm.py`；双输出和四端口结构由分束器/耦合器与差分相移构成，实际 MZM 在共享理想干涉器上加入插损和有限消光比。
 
-### 1.4 v0.10 专项验证
+### 1.4 v0.10.1 专项验证
 
 ```powershell
 # 在仓库根目录执行
@@ -132,19 +132,25 @@ python -m pytest -q -p no:cacheprovider tests
 
 ### 1.5 长序列分块和批量张量
 
-`PhotonicRealConvolution` 和 `DifferentialPhotonicConvolution` 接受任意前导批量维，最后一维始终是一维串行样本。`forward_chunked()` 会给每块自动补足历史样本，因此不是把每段当成互不相关的新记录。
+`PhotonicRealConvolution`、`DifferentialPhotonicConvolution` 和 `MZIComplexConv1d` 接受批量张量，最后一维始终是一维串行样本。`forward_chunked()` 会给每块自动补足历史样本并拼接全部结果；真正限制训练峰值内存时应使用 `iter_chunked()`，对每块立即反向传播，从而不同时保留全部分块计算图。
 
 ```python
 import torch
 from optosimlab import DifferentialPhotonicConvolution
 
 x = torch.rand(32, 4, 1_000_000)  # batch=32，4 条并行序列
-layer = DifferentialPhotonicConvolution(torch.tensor([-0.2, 0.5, 0.8]))
-y = layer.forward_chunked(x, chunk_size=65_536)
-assert y.shape == x.shape
+layer = DifferentialPhotonicConvolution(
+    torch.tensor([-0.2, 0.5, 0.8]), differential_depth=0.8
+)
+optimizer = torch.optim.Adam(layer.parameters(), lr=1e-3)
+optimizer.zero_grad()
+for y_chunk in layer.iter_chunked(x, chunk_size=65_536):
+    (y_chunk.square().sum() / x.numel()).backward()
+optimizer.step()
+layer.project_physical_parameters_()
 ```
 
-分块路径与整段路径的输出、输入梯度和 WaveShaper 参数梯度均有自动回归测试。优化器更新后应调用 `project_physical_parameters_()`，把无源 WaveShaper 的衰减投影回非负区间。
+分块路径与整段路径的输出、输入梯度和 WaveShaper 参数梯度均有自动回归测试。优化器更新后应调用 `project_physical_parameters_()`，把无源 WaveShaper 的衰减投影回非负区间。测试还验证两条平衡支路均有非零梯度，且一个正权重能够训练为负权重。
 
 ### 1.6 MNIST 理想、非理想和强度 MZI 激活实验
 
@@ -164,6 +170,8 @@ python examples\train_mnist_photonic.py --synthetic-smoke --epochs 1
 
 非理想模式明确启用：MZM 插损 3 dB、消光比 20 dB、光纤衰减 0.2 dB/km，以及探测器读出高斯噪声 `noise_std_w=1e-6 W`。它没有虚构尚未建模的激光 RIN、ADC 量化或器件温漂；这些边界会随实验标定再扩展。
 
+固定随机种子下使用 4096 条训练样本、1024 条测试样本、CPU、2 epoch 的快速验收结果为：理想/ReLU `77.83%`，非理想/ReLU `78.32%`，理想/强度 MZI `62.50%`。三条路径的损失均下降；这些数字用于确认实现可训练，不是完整数据集上的最终精度声明。
+
 ### 1.7 MZI 相干复值光学卷积
 
 `MZIComplexConv1d` 不是旧 `ComplexConv1d` 的四次实卷积包装。它把每个复系数写为 MZI 内部相移 `theta` 控制的幅度和外部相移 `phi` 控制的相位，窗口内各光场随后相干求和。其依据是 [Nature Communications 12, 457 (2021)](https://doi.org/10.1038/s41467-020-20719-7) 的复值 MZI 网络与相干探测路线。
@@ -180,7 +188,7 @@ loss = y.abs().square().mean()
 loss.backward()  # theta、phi 和输入都有梯度
 ```
 
-该层输出的是经过已知行范数标定后的复场；非零 `insertion_loss_db` 保留公共场损耗，`phase_error_std_rad` 可加入逐次前向的相移误差。旧 `ComplexConv1d` 仍只作为纯数学兼容层保留。
+该层输出的是经过已知行范数标定后的复场；非零 `insertion_loss_db` 保留公共场损耗，`phase_error_std_rad` 可加入逐次前向的相移误差。训练更新后调用 `project_physical_parameters_()`，会把负幅度并入外相移并将每个输出行的归一化幅度二范数限制在 1 以内，维持无源 MZI 网络可实现性。旧 `ComplexConv1d` 仍只作为纯数学兼容层保留。
 
 ## 2. 每次开始开发时
 
@@ -194,7 +202,7 @@ python -c "import torch, numpy; print('torch =', torch.__version__); print('nump
 python -m pytest
 ```
 
-成功标准：最后一条命令显示 `105 passed` 或更多，且没有失败项目；没有 CUDA 时会额外显示 1 项明确跳过的 GPU 一致性测试。
+成功标准：最后一条命令没有失败项目；没有 CUDA 时会额外显示 1 项明确跳过的 GPU 一致性测试。
 
 如果 PowerShell 不允许激活虚拟环境，只对当前窗口执行：
 

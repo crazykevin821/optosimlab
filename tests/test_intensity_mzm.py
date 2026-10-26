@@ -23,3 +23,18 @@ def test_intensity_mzm_activation_is_nonnegative_and_trainable() -> None:
     assert values.grad is not None and torch.all(torch.isfinite(values.grad))
     assert activation.input_scale_v_per_unit.grad is not None
     assert activation.modulator.bias_voltage.grad is not None
+
+
+def test_intensity_mzm_projection_repairs_optimizer_boundary_violations() -> None:
+    activation = IntensityMZMActivation()
+    with torch.no_grad():
+        activation.input_scale_v_per_unit.fill_(-0.2)
+        activation.modulator.v_pi.fill_(-1.0)
+        activation.modulator.insertion_loss_db.fill_(-0.5)
+        activation.modulator.extinction_ratio_db.fill_(-2.0)
+    activation.project_physical_parameters_()
+    assert activation.input_scale_v_per_unit >= 0
+    assert activation.modulator.v_pi > 0
+    assert activation.modulator.insertion_loss_db >= 0
+    assert activation.modulator.extinction_ratio_db >= 0
+    assert torch.all(torch.isfinite(activation(torch.linspace(-1.0, 1.0, 9))))

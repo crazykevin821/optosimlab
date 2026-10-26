@@ -1,7 +1,7 @@
-"""Physical-unit conventions and conversion helpers.
+"""物理单位约定与换算工具。
 
-OptoSimLab uses SI units at public interfaces.  A complex optical envelope E
-is normalized so that abs(E)**2 is instantaneous optical power in watts.
+OptoSimLab 的公开接口统一使用 SI 单位。复光包络 ``E`` 的归一化约定为
+``abs(E)**2`` 等于瞬时光功率，单位为瓦。
 """
 
 from __future__ import annotations
@@ -27,23 +27,23 @@ DEFAULT_UNITS = {
 
 
 def mw_to_w(power_mw: Tensor | float) -> Tensor:
-    """Convert milliwatts to watts."""
+    """把毫瓦换算为瓦。"""
     return torch.as_tensor(power_mw) * 1e-3
 
 
 def w_to_mw(power_w: Tensor | float) -> Tensor:
-    """Convert watts to milliwatts."""
+    """把瓦换算为毫瓦。"""
     return torch.as_tensor(power_w) * 1e3
 
 
 def dbm_to_w(power_dbm: Tensor | float) -> Tensor:
-    """Convert dBm to watts."""
+    """把 dBm 换算为瓦。"""
     value = torch.as_tensor(power_dbm)
     return torch.pow(torch.as_tensor(10.0, device=value.device, dtype=value.dtype), value / 10.0) * 1e-3
 
 
 def w_to_dbm(power_w: Tensor | float) -> Tensor:
-    """Convert strictly positive power in watts to dBm."""
+    """把严格为正的瓦功率换算为 dBm。"""
     value = torch.as_tensor(power_w)
     if torch.any(value <= 0):
         raise ValueError("power_w must be positive")
@@ -51,19 +51,19 @@ def w_to_dbm(power_w: Tensor | float) -> Tensor:
 
 
 def db_to_power_ratio(value_db: Tensor | float) -> Tensor:
-    """Convert a power gain/loss in dB to a dimensionless power ratio."""
+    """把功率增益或损耗 dB 换算为无量纲功率比。"""
     value = torch.as_tensor(value_db)
     return torch.pow(torch.as_tensor(10.0, device=value.device, dtype=value.dtype), value / 10.0)
 
 
 def db_to_field_ratio(value_db: Tensor | float) -> Tensor:
-    """Convert a power gain/loss in dB to the corresponding field ratio."""
+    """把功率增益或损耗 dB 换算为对应场幅度比。"""
     value = torch.as_tensor(value_db)
     return torch.pow(torch.as_tensor(10.0, device=value.device, dtype=value.dtype), value / 20.0)
 
 
 def power_ratio_to_db(ratio: Tensor | float) -> Tensor:
-    """Convert a strictly positive power ratio to dB."""
+    """把严格为正的功率比换算为 dB。"""
     value = torch.as_tensor(ratio)
     if torch.any(value <= 0):
         raise ValueError("ratio must be positive")
@@ -71,7 +71,7 @@ def power_ratio_to_db(ratio: Tensor | float) -> Tensor:
 
 
 def field_from_power_w(power_w: Tensor | float, phase_rad: Tensor | float = 0.0) -> Tensor:
-    """Create a complex field in sqrt(W) from power in W and phase in rad."""
+    """根据功率 W 和相位 rad 生成单位为 sqrt(W) 的复光场。"""
     power = torch.as_tensor(power_w)
     if not power.is_floating_point():
         power = power.to(torch.get_default_dtype())
@@ -82,7 +82,7 @@ def field_from_power_w(power_w: Tensor | float, phase_rad: Tensor | float = 0.0)
 
 
 def field_power_w(field: Tensor) -> Tensor:
-    """Return instantaneous optical power in W from a complex field."""
+    """根据复光场返回瞬时光功率 W。"""
     if not torch.is_complex(field):
         raise TypeError("field must be a complex tensor")
     return field.abs().square()

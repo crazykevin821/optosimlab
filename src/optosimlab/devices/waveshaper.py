@@ -1,4 +1,4 @@
-"""Differentiable programmable frequency-domain shaping."""
+"""可微分、可编程的频域整形器。"""
 
 from __future__ import annotations
 
@@ -10,13 +10,11 @@ from .base import GraphDevice, nonnegative_parameter, require_complex_field
 
 
 class WaveShaper(GraphDevice):
-    """A trainable WaveShaper-like attenuation and phase mask.
+    """可训练的 WaveShaper 类衰减与相位掩模。
 
-    Control points are ordered on an fft-shifted frequency axis from negative
-    offset to positive offset, so the centre control point represents the
-    optical carrier.  The response is linearly interpolated onto the current
-    FFT grid.  ``attenuation_db`` is constrained to be non-negative, matching
-    a passive waveshaper; arbitrary phase is allowed.
+    控制点按 fftshift 后的频率轴从负频偏到正频偏排列，中间控制点代表
+    光载波。响应会线性插值到当前 FFT 网格。``attenuation_db`` 受非负
+    约束以符合无源 WaveShaper，``phase_rad`` 则允许任意相位。
     """
 
     def __init__(
@@ -66,7 +64,7 @@ class WaveShaper(GraphDevice):
         return values[lower] + fraction * (values[upper] - values[lower])
 
     def transfer_at_frequencies(self, frequencies_hz: Tensor, *, dtype: torch.dtype | None = None) -> Tensor:
-        """Return complex field transmission at arbitrary carrier offsets."""
+        """返回任意载频偏移处的复场透射系数。"""
         if not isinstance(frequencies_hz, Tensor) or torch.is_complex(frequencies_hz):
             raise TypeError("frequencies_hz must be a real-valued torch.Tensor")
         dtype = dtype or (frequencies_hz.dtype if frequencies_hz.is_floating_point() else torch.float32)

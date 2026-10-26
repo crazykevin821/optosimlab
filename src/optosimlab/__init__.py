@@ -1,4 +1,4 @@
-"""Differentiable signal-level optical simulation primitives."""
+"""可微分的信号级光学仿真基础模块。"""
 
 from .config import C_LIGHT, H_PLANCK, SimulationGrid
 from .blocks import (

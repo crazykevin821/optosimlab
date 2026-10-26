@@ -1,4 +1,4 @@
-"""Integrated MZM, splitter, coupler and multi-port interferometer models."""
+"""统一的 MZM、分束器、耦合器与多端口干涉仪模型。"""
 
 from __future__ import annotations
 
@@ -33,7 +33,7 @@ def _require_real_voltage(voltage: Tensor) -> None:
 
 
 class PowerSplitter1x2(GraphDevice):
-    """Reciprocal 1x2 splitter with explicit cross-arm quadrature phase."""
+    """显式保留交叉臂正交相位的互易 1x2 分束器。"""
 
     graph_output_ports = ("through", "cross")
 
@@ -56,7 +56,7 @@ class PowerSplitter1x2(GraphDevice):
 
 
 class DirectionalCoupler2x2(GraphDevice):
-    """Reciprocal unitary 2x2 coupler with j on both cross coefficients."""
+    """两个交叉系数均带 j 相位的互易幺正 2x2 耦合器。"""
 
     graph_input_ports = ("input0", "input1")
     graph_output_ports = ("output0", "output1")
@@ -93,12 +93,11 @@ class DirectionalCoupler2x2(GraphDevice):
 
 
 class DifferentialDualPortMZM(GraphDevice):
-    """One-input, complementary-two-output push-pull MZM.
+    """单输入、互补双输出的推挽式 MZM。
 
-    The device is assembled from a 1x2 splitter, differential arm phase and a
-    2x2 output coupler.  At 50:50 and zero loss its outputs are
-    E_bar=E_in*cos(x) and E_cross=E_in*sin(x), with
-    x=pi*(V+V_bias)/(2*V_pi).
+    器件由 1x2 分束器、双臂差分相移及 2x2 输出耦合器构成。在 50:50、
+    零损耗条件下，输出为 ``E_bar=E_in*cos(x)``、
+    ``E_cross=E_in*sin(x)``，其中 ``x=pi*(V+V_bias)/(2*V_pi)``。
     """
 
     graph_input_ports = ("carrier", "voltage")
@@ -161,7 +160,7 @@ class DifferentialDualPortMZM(GraphDevice):
 
 
 class FourPortMZM(GraphDevice):
-    """Two-input/two-output (four optical port) differential MZM."""
+    """双输入、双输出（四光端口）的差分 MZM。"""
 
     graph_input_ports = ("input0", "input1", "voltage")
     graph_output_ports = ("output0", "output1")
@@ -205,7 +204,7 @@ class FourPortMZM(GraphDevice):
 
 
 class IdealMZM(GraphDevice):
-    """Ideal single-input/single-output MZM built from the dual-port core."""
+    """由共享双输出干涉核心构成的理想单入单出 MZM。"""
 
     graph_input_ports = ("carrier", "voltage")
 
@@ -242,7 +241,7 @@ class IdealMZM(GraphDevice):
         return 2.0 * v_pi * torch.acos(torch.sqrt(transmission)) / torch.pi - bias
 
     def power_transmission_bounds(self, reference: Tensor) -> tuple[Tensor, Tensor]:
-        """Return the minimum and maximum reachable power transmission."""
+        """返回可达到的最小和最大功率透射率。"""
         if not isinstance(reference, Tensor) or torch.is_complex(reference) or not reference.is_floating_point():
             raise TypeError("reference must be a real floating-point torch.Tensor")
         return torch.zeros((), device=reference.device, dtype=reference.dtype), torch.ones(
@@ -254,11 +253,10 @@ class IdealMZM(GraphDevice):
 
 
 class MachZehnderModulator(GraphDevice):
-    """Practical analytic MZM with insertion loss and finite extinction ratio.
+    """含插入损耗和有限消光比的实际解析 MZM。
 
-    The ideal bar and complementary cross outputs come from IdealMZM's shared
-    interferometer.  The cross field supplies the finite-extinction leakage,
-    so the practical model does not duplicate the MZI transfer derivation.
+    理想直通端和互补交叉端来自 ``IdealMZM`` 共享的干涉仪。交叉端场用于提供
+    有限消光比泄漏，因此实际模型无需重复推导 MZI 传递函数。
     """
 
     graph_input_ports = ("carrier", "voltage")
@@ -315,7 +313,7 @@ class MachZehnderModulator(GraphDevice):
         return self.ideal.voltage_for_power_transmission(normalized.clamp(0.0, 1.0))
 
     def power_transmission_bounds(self, reference: Tensor) -> tuple[Tensor, Tensor]:
-        """Return leakage-floor and peak transmission, including insertion loss."""
+        """返回包含插损的泄漏底值和峰值透射率。"""
         if not isinstance(reference, Tensor) or torch.is_complex(reference) or not reference.is_floating_point():
             raise TypeError("reference must be a real floating-point torch.Tensor")
         loss_db = nonnegative_parameter(self.insertion_loss_db, "insertion_loss_db").to(
@@ -337,11 +335,11 @@ class MachZehnderModulator(GraphDevice):
 
 
 class PracticalMZM(MachZehnderModulator):
-    """Explicit name for the practical analytic MZM; legacy name is retained."""
+    """实际解析 MZM 的明确名称，同时保留旧类名兼容。"""
 
 
 class MeasuredMZM(GraphDevice):
-    """MZM driven by a measured voltage-to-power-transmission curve."""
+    """由实测电压到功率透射曲线驱动的 MZM。"""
 
     graph_input_ports = ("carrier", "voltage")
 
@@ -410,7 +408,7 @@ class MeasuredMZM(GraphDevice):
         return self._interpolate(transmission, curve, voltages)
 
     def power_transmission_bounds(self, reference: Tensor) -> tuple[Tensor, Tensor]:
-        """Return the measured curve's reachable power-transmission interval."""
+        """返回实测曲线可达到的功率透射区间。"""
         if not isinstance(reference, Tensor) or torch.is_complex(reference) or not reference.is_floating_point():
             raise TypeError("reference must be a real floating-point torch.Tensor")
         curve = self.power_transmission.to(device=reference.device, dtype=reference.dtype)
@@ -459,7 +457,7 @@ class MeasuredMZM(GraphDevice):
 
 
 class MZMWithElectricalFilter(GraphDevice):
-    """Electrical low-pass filter followed by a selected MZM implementation."""
+    """电低通滤波器后接指定 MZM 实现。"""
 
     graph_input_ports = ("carrier", "voltage")
 
@@ -538,6 +536,14 @@ class IntensityMZM(GraphDevice):
             raise ValueError("carrier and voltage must share their final sample dimension")
         return carrier * torch.sqrt(self.power_transmission(voltage).to(carrier.real.dtype))
 
+    def project_physical_parameters_(self) -> "IntensityMZM":
+        """把训练后的物理参数投影回无源强度调制器的允许范围。"""
+        with torch.no_grad():
+            self.v_pi.clamp_(min=torch.finfo(self.v_pi.dtype).eps)
+            self.insertion_loss_db.clamp_(min=0.0)
+            self.extinction_ratio_db.clamp_(min=0.0)
+        return self
+
 
 class IntensityMZMActivation(nn.Module):
     """把神经网络实值张量映射到强度 MZI 的非线性传输曲线。
@@ -578,6 +584,13 @@ class IntensityMZMActivation(nn.Module):
             values.device, values.dtype
         )
         return self.modulator.power_transmission(scale * values)
+
+    def project_physical_parameters_(self) -> "IntensityMZMActivation":
+        """投影输入缩放和内部强度 MZI 的全部物理参数。"""
+        with torch.no_grad():
+            self.input_scale_v_per_unit.clamp_(min=0.0)
+        self.modulator.project_physical_parameters_()
+        return self
 
 
 class MZIComplexWeightBank(GraphDevice):
@@ -642,11 +655,32 @@ class MZIComplexWeightBank(GraphDevice):
         amplitude = self.weight_scale.to(device, dtype) * field_loss * torch.cos(self.theta_rad / 2.0)
         return torch.complex(amplitude * torch.cos(phase), amplitude * torch.sin(phase))
 
-    def forward(self, windows: Tensor) -> Tensor:
+    def forward(self, windows: Tensor, effective_weights: Tensor | None = None) -> Tensor:
         require_complex_field(windows)
         if windows.ndim != 4:
             raise ValueError("windows must have shape (batch, in_channels, positions, kernel_size)")
         if windows.shape[1] != self.in_channels or windows.shape[-1] != self.kernel_size:
             raise ValueError("window channels/kernel size do not match the MZI weight bank")
-        weights = self.effective_weights().to(device=windows.device, dtype=windows.dtype)
+        weights = self.effective_weights() if effective_weights is None else effective_weights
+        if weights.shape != self.theta_rad.shape or not torch.is_complex(weights):
+            raise ValueError("effective_weights must be a complex tensor matching the MZI bank shape")
+        weights = weights.to(device=windows.device, dtype=windows.dtype)
         return torch.einsum("nclk,ock->nol", windows, weights)
+
+    def project_physical_parameters_(self) -> "MZIComplexWeightBank":
+        """投影到无源复权重集合，并把负幅度等价地并入外部相位。"""
+        with torch.no_grad():
+            self.insertion_loss_db.clamp_(min=0.0)
+            signed_amplitude = torch.cos(self.theta_rad / 2.0)
+            phase_shift = torch.where(
+                signed_amplitude < 0.0,
+                torch.full_like(signed_amplitude, torch.pi),
+                torch.zeros_like(signed_amplitude),
+            )
+            amplitude = signed_amplitude.abs()
+            row_norm = torch.linalg.vector_norm(amplitude, dim=(1, 2), keepdim=True)
+            amplitude = amplitude / row_norm.clamp_min(1.0)
+            self.theta_rad.copy_(2.0 * torch.acos(amplitude.clamp(0.0, 1.0)))
+            self.phi_rad.add_(phase_shift)
+            self.phi_rad.remainder_(2.0 * torch.pi)
+        return self

@@ -1,4 +1,4 @@
-"""Deterministic small-signal erbium-doped fibre amplifier model."""
+"""确定性小信号掺铒光纤放大器模型。"""
 
 from __future__ import annotations
 
@@ -13,20 +13,18 @@ from .base import GraphDevice, nonnegative_parameter, require_complex_field
 
 
 class GainControlledEDFA(GraphDevice):
-    """Commercial-style gain-controlled EDFA.
+    """按商用设备方式直接设定增益的 EDFA。
 
-    The user-facing control is net peak power gain in dB, matching a
-    commercial amplifier's constant-gain mode.  Pump current and population
-    dynamics are intentionally outside this link-level model.
+    面向用户的控制量是峰值净功率增益 dB，对应商用放大器的恒增益模式。
+    泵浦电流及粒子数动态不在此链路级模型范围内。
 
-    The unsaturated power gain is a Gaussian whose FWHM is
-    gain_bandwidth_hz.  Saturation uses a smooth output-referenced knee:
+    未饱和功率增益为高斯形，其半高全宽为 ``gain_bandwidth_hz``。
+    饱和采用以输出功率为参考的平滑转折：
 
         G_eff = 1 + (G_ss - 1) / (1 + G_ss * P_in / P_sat,out)
 
-    Thus the excess gain is approximately 3 dB compressed when the predicted
-    small-signal output reaches P_sat,out, while the gain remains at least one.
-    ASE uses a one-polarization complex-envelope convention.
+    当预测小信号输出达到 ``P_sat,out`` 时，超出 1 的增益部分约压缩 3 dB，
+    同时总增益不低于 1。ASE 使用单偏振复包络约定。
     """
 
     def __init__(
@@ -67,7 +65,7 @@ class GainControlledEDFA(GraphDevice):
         device: torch.device | None = None,
         dtype: torch.dtype | None = None,
     ) -> Tensor:
-        """Return the FFT-order unsaturated power gain."""
+        """返回 FFT 顺序的未饱和功率增益。"""
         if samples <= 0:
             raise ValueError("samples must be positive")
         device = device or self.gain_db.device
@@ -84,7 +82,7 @@ class GainControlledEDFA(GraphDevice):
         return db_to_power_ratio(gain_db).to(device=device, dtype=dtype) * profile
 
     def effective_power_gain(self, field: Tensor) -> Tensor:
-        """Return gain after optional output-referenced saturation."""
+        """返回经过可选输出参考饱和后的增益。"""
         require_complex_field(field)
         gain = self.small_signal_power_gain(
             field.shape[-1], device=field.device, dtype=field.real.dtype
@@ -100,7 +98,7 @@ class GainControlledEDFA(GraphDevice):
         return torch.where(gain >= 1.0, saturated_amplifying_band, gain)
 
     def ase_power_spectral_density(self, gain: Tensor) -> Tensor:
-        """Return one-polarization output ASE PSD in W/Hz."""
+        """返回单偏振输出 ASE 功率谱密度，单位 W/Hz。"""
         dtype = gain.dtype
         device = gain.device
         noise_figure_db = nonnegative_parameter(self.noise_figure_db, "noise_figure_db").to(
@@ -115,7 +113,7 @@ class GainControlledEDFA(GraphDevice):
         return n_sp * photon_energy * (gain - 1.0).clamp_min(0.0)
 
     def forward(self, field: Tensor) -> Tensor:
-        """Apply gain, saturation and optional ASE to a complex field."""
+        """对复光场施加增益、饱和与可选 ASE。"""
         require_complex_field(field)
         samples = field.shape[-1]
         gain = self.effective_power_gain(field)
@@ -133,22 +131,20 @@ class GainControlledEDFA(GraphDevice):
 
 
 class SmallSignalEDFA(GraphDevice):
-    """Frequency-dependent, deterministic small-signal EDFA.
+    """随频率变化的确定性小信号 EDFA。
 
-    The model deliberately covers the linear operating regime only.  Its peak
-    *net* power gain in dB is
+    本模型刻意只覆盖线性工作区，其峰值净功率增益 dB 为
 
     ``G_peak_dB = gain_slope_dB_per_mA * max(I_pump - I_transparency, 0) - L``.
 
-    Around ``gain_center_offset_hz`` the relative power-gain profile is a
-    Gaussian with full width at half maximum ``gain_bandwidth_hz``:
+    以 ``gain_center_offset_hz`` 为中心的相对功率增益为高斯形，
+    半高全宽是 ``gain_bandwidth_hz``：
 
     ``G_power(f) = 10**(G_peak_dB / 10) * exp[-4 ln(2) ((f-f0)/B)^2]``.
 
-    Therefore the power gain at ``f0 +/- B/2`` is exactly half its peak
-    (a -3.0103 dB relative drop).  The optical *field* receives
-    ``sqrt(G_power)``.  This version has no ASE noise, gain saturation, pump
-    dynamics, polarization dependence or transient population dynamics.
+    因此在 ``f0 +/- B/2`` 处，功率增益恰为峰值的一半（相对下降
+    -3.0103 dB），光场乘以 ``sqrt(G_power)``。该版本不包含 ASE、
+    增益饱和、泵浦动态、偏振相关性或瞬态粒子数动态。
     """
 
     def __init__(
@@ -183,7 +179,7 @@ class SmallSignalEDFA(GraphDevice):
         self.insertion_loss_db = nn.Parameter(torch.tensor(float(insertion_loss_db)), requires_grad=trainable)
 
     def peak_net_gain_db(self, *, device: torch.device | None = None, dtype: torch.dtype | None = None) -> Tensor:
-        """Return current-mapped peak net power gain in dB."""
+        """返回由电流经验映射得到的峰值净功率增益 dB。"""
         device = device or self.pump_current_ma.device
         dtype = dtype or self.pump_current_ma.dtype
         pump = nonnegative_parameter(self.pump_current_ma, "pump_current_ma").to(device=device, dtype=dtype)
@@ -193,11 +189,10 @@ class SmallSignalEDFA(GraphDevice):
         return slope * (pump - transparency).clamp_min(0.0) - loss
 
     def power_gain(self, samples: int, *, device: torch.device | None = None, dtype: torch.dtype | None = None) -> Tensor:
-        """Return FFT-order power gain for a finite record.
+        """返回有限记录对应的 FFT 顺序功率增益。
 
-        ``gain_bandwidth_hz`` is the FWHM of the relative *power* gain, not a
-        field-amplitude width and not a bandwidth measured at an arbitrary dB
-        level.
+        ``gain_bandwidth_hz`` 是相对功率增益的半高全宽，不是场幅宽，
+        也不是在任意 dB 电平处定义的带宽。
         """
         if samples <= 0:
             raise ValueError("samples must be positive")
@@ -211,31 +206,30 @@ class SmallSignalEDFA(GraphDevice):
         return torch.pow(ten, self.peak_net_gain_db(device=device, dtype=dtype) / 10.0) * relative_gain
 
     def transfer_function(self, samples: int, *, device: torch.device, dtype: torch.dtype) -> Tensor:
-        """Return the real field-amplitude transfer function ``sqrt(G_power)``."""
+        """返回实数场幅度传输函数 ``sqrt(G_power)``。"""
         return torch.sqrt(self.power_gain(samples, device=device, dtype=dtype))
 
     def forward(self, field: Tensor) -> Tensor:
-        """Apply deterministic frequency-dependent small-signal amplification."""
+        """施加确定性的频率相关小信号放大。"""
         require_complex_field(field)
         transfer = self.transfer_function(field.shape[-1], device=field.device, dtype=field.real.dtype)
         return torch.fft.ifft(torch.fft.fft(field, dim=-1) * transfer, dim=-1)
 
 
 class SaturatedNoisyEDFA(SmallSignalEDFA):
-    """Small-signal EDFA extended with phenomenological saturation and ASE.
+    """在小信号 EDFA 上增加现象学饱和与 ASE。
 
-    For average input signal power ``P_in`` the deterministic gain is
+    对平均输入信号功率 ``P_in``，确定性增益为
     ``G_eff(f) = G_ss(f) / (1 + P_in / P_sat)``.  This is a scalar-gain
-    saturation approximation: it preserves the spectral shape while reducing
-    its level, and is appropriate for differentiable link-level experiments,
-    not for modelling population dynamics.
+    这是标量增益饱和近似：在降低增益电平时保持频谱形状，适用于可微链路级
+    实验，不适用于粒子数动态建模。
 
-    ASE follows a one-polarization complex-envelope convention.  With
-    ``NF_linear = 10**(NF_dB / 10)`` and ``n_sp = NF_linear / 2``, its two-sided
-    output PSD is ``S_ASE(f) = n_sp h nu max(G_eff(f)-1, 0)`` in W/Hz.
-    For FFT size ``N`` and bin width ``df``, an unnormalised FFT noise bin has
-    variance ``N**2 S_ASE df``.  PyTorch's IFFT then gives the correct expected
-    time-domain mean noise power ``sum(S_ASE df)``.
+    ASE 采用单偏振复包络约定。令 ``NF_linear=10**(NF_dB/10)`` 且
+    ``n_sp=NF_linear/2``，双边输出 PSD 为
+    ``S_ASE(f)=n_sp*h*nu*max(G_eff(f)-1,0)``，单位 W/Hz。FFT 点数为 ``N``、
+    频点宽度为 ``df`` 时，未归一化 FFT 噪声频点方差为
+    ``N**2*S_ASE*df``；PyTorch IFFT 给出的时域期望平均噪声功率因而为
+    ``sum(S_ASE*df)``。
     """
 
     def __init__(
@@ -279,7 +273,7 @@ class SaturatedNoisyEDFA(SmallSignalEDFA):
         device: torch.device | None = None,
         dtype: torch.dtype | None = None,
     ) -> Tensor:
-        """Return saturated power gain; leading dimensions follow ``signal_power``."""
+        """返回饱和功率增益；前导维与 ``signal_power`` 一致。"""
         device = device or self.pump_current_ma.device
         dtype = dtype or self.pump_current_ma.dtype
         power = torch.as_tensor(signal_power, device=device, dtype=dtype)
@@ -294,7 +288,7 @@ class SaturatedNoisyEDFA(SmallSignalEDFA):
         device: torch.device | None = None,
         dtype: torch.dtype | None = None,
     ) -> Tensor:
-        """Return one-polarization complex-envelope ASE PSD in W/Hz."""
+        """返回单偏振复包络 ASE 功率谱密度，单位 W/Hz。"""
         device = device or self.pump_current_ma.device
         dtype = dtype or self.pump_current_ma.dtype
         gain = self.effective_power_gain(samples, signal_power, device=device, dtype=dtype)
@@ -304,7 +298,7 @@ class SaturatedNoisyEDFA(SmallSignalEDFA):
         return n_sp * photon_energy * (gain - 1.0).clamp_min(0.0)
 
     def forward(self, field: Tensor) -> Tensor:
-        """Amplify ``field`` with saturation and, optionally, statistically correct ASE."""
+        """对 ``field`` 进行饱和放大，并可选加入统计正确的 ASE。"""
         require_complex_field(field)
         samples = field.shape[-1]
         signal_power = field.abs().square().mean(dim=-1, keepdim=True)

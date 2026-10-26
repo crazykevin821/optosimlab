@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+from collections.abc import Iterator
 import copy
 import math
 
@@ -192,19 +193,19 @@ class PhotonicRealConvolution(nn.Module):
             raise ValueError("combined line power, fibre transmission and MZM swing are too small to calibrate")
         return (detected - baseline) / calibration
 
-    def forward_chunked(self, samples: Tensor, chunk_size: int) -> Tensor:
+    def iter_chunked(self, samples: Tensor, chunk_size: int) -> Iterator[Tensor]:
         """按序列分块执行，降低长记录的峰值内存并保持精确因果历史。
 
         每块自动携带 ``(tap_count-1)*tap_delay_samples`` 个历史样本，记录
-        开头缺失的历史用零填充。块之间不截断梯度，拼接结果应与一次性
-        ``forward`` 在数值误差内一致。
+        开头缺失的历史用零填充。调用方可逐块计算损失并立即反向传播，
+        从而避免同时保留全部分块的 autograd 图。
         """
         if not isinstance(chunk_size, int) or chunk_size < 1:
             raise ValueError("chunk_size must be a positive integer")
         if samples.shape[-1] <= chunk_size:
-            return self(samples)
+            yield self(samples)
+            return
         maximum_delay = (self.comb.line_count - 1) * self.tap_delay_samples
-        outputs: list[Tensor] = []
         total = samples.shape[-1]
         for start in range(0, total, chunk_size):
             stop = min(start + chunk_size, total)
@@ -214,8 +215,11 @@ class PhotonicRealConvolution(nn.Module):
             if missing_history:
                 segment = F.pad(segment, (missing_history, 0))
             segment_output = self(segment)
-            outputs.append(segment_output[..., - (stop - start) :])
-        return torch.cat(outputs, dim=-1)
+            yield segment_output[..., - (stop - start) :]
+
+    def forward_chunked(self, samples: Tensor, chunk_size: int) -> Tensor:
+        """拼接 :meth:`iter_chunked` 的输出并保持与整段前向一致。"""
+        return torch.cat(tuple(self.iter_chunked(samples, chunk_size)), dim=-1)
 
     def project_physical_parameters_(self) -> "PhotonicRealConvolution":
         """优化器更新后把无源 WaveShaper 衰减投影回非负物理区间。"""
@@ -227,27 +231,45 @@ class PhotonicRealConvolution(nn.Module):
 class DifferentialPhotonicConvolution(nn.Module):
     """由两条独立正、负物理卷积支路作差得到的有符号卷积。"""
 
-    def __init__(self, weights: Tensor, **kwargs: object) -> None:
+    def __init__(
+        self,
+        weights: Tensor,
+        *,
+        differential_depth: float = 0.8,
+        **kwargs: object,
+    ) -> None:
         super().__init__()
         values = torch.as_tensor(weights, dtype=torch.float32)
         if values.ndim != 1 or values.numel() < 1:
             raise ValueError("weights must be a non-empty one-dimensional tensor")
-        scale = values.abs().max().clamp_min(torch.finfo(values.dtype).eps)
-        self.register_buffer("weight_scale", scale)
+        if not 0.0 < differential_depth < 1.0:
+            raise ValueError("differential_depth must lie strictly between 0 and 1")
+        # 标定尺度至少取 1，避免全零或极小初始核把可训练动态范围和梯度一并压扁。
+        kernel_scale = values.abs().max().clamp_min(1.0)
+        normalized = values / kernel_scale
+        depth = torch.tensor(float(differential_depth), dtype=values.dtype)
+        self.register_buffer("differential_depth", depth)
+        self.register_buffer("weight_scale", kernel_scale / depth)
         positive_kwargs = dict(kwargs)
         negative_kwargs = copy.deepcopy(kwargs)
-        self.positive = PhotonicRealConvolution((values / scale).clamp_min(0.0), **positive_kwargs)
-        self.negative = PhotonicRealConvolution((-values / scale).clamp_min(0.0), **negative_kwargs)
+        positive_weights = 0.5 * (1.0 + depth * normalized)
+        negative_weights = 0.5 * (1.0 - depth * normalized)
+        self.positive = PhotonicRealConvolution(positive_weights, **positive_kwargs)
+        self.negative = PhotonicRealConvolution(negative_weights, **negative_kwargs)
 
     def forward(self, samples: Tensor) -> Tensor:
         return self.weight_scale * (self.positive(samples) - self.negative(samples))
 
     def forward_chunked(self, samples: Tensor, chunk_size: int) -> Tensor:
         """对正、负两条物理支路使用相同分块边界。"""
-        return self.weight_scale * (
-            self.positive.forward_chunked(samples, chunk_size)
-            - self.negative.forward_chunked(samples, chunk_size)
-        )
+        return torch.cat(tuple(self.iter_chunked(samples, chunk_size)), dim=-1)
+
+    def iter_chunked(self, samples: Tensor, chunk_size: int) -> Iterator[Tensor]:
+        """逐块返回差分输出，允许调用方逐块反向传播以限制峰值内存。"""
+        positive_chunks = self.positive.iter_chunked(samples, chunk_size)
+        negative_chunks = self.negative.iter_chunked(samples, chunk_size)
+        for positive, negative in zip(positive_chunks, negative_chunks, strict=True):
+            yield self.weight_scale * (positive - negative)
 
     @property
     def effective_weights(self) -> Tensor:
