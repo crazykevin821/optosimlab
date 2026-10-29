@@ -1,6 +1,9 @@
+import copy
+
+import pytest
 import torch
 
-from optosimlab import MZIComplexConv1d
+from optosimlab import MZIComplexConv1d, MZIComplexWeightBank
 
 
 def direct_causal_complex_convolution(field: torch.Tensor, weights: torch.Tensor, delay: int) -> torch.Tensor:
@@ -71,3 +74,43 @@ def test_chunked_complex_convolution_reuses_one_phase_error_sample() -> None:
     torch.manual_seed(91)
     actual = layer.forward_chunked(field, 7)
     assert torch.allclose(actual, expected, atol=2e-6, rtol=2e-6)
+
+
+def test_complex_iter_chunked_supports_immediate_backward_and_matches_full_gradients() -> None:
+    weights = torch.tensor([[[0.3 + 0.2j, -0.1 + 0.4j]]])
+    full_layer = MZIComplexConv1d(weights, bias=True, phase_error_std_rad=0.1)
+    chunked_layer = copy.deepcopy(full_layer)
+    full_input = torch.randn(2, 1, 31, dtype=torch.complex64, requires_grad=True)
+    chunked_input = full_input.detach().clone().requires_grad_(True)
+
+    torch.manual_seed(92)
+    full_layer(full_input).abs().square().sum().div(full_input.numel()).backward()
+    torch.manual_seed(92)
+    for chunk in chunked_layer.iter_chunked(chunked_input, 7):
+        chunk.abs().square().sum().div(chunked_input.numel()).backward()
+
+    assert torch.allclose(chunked_input.grad, full_input.grad, atol=3e-6, rtol=3e-6)
+    for full_parameter, chunked_parameter in zip(
+        full_layer.parameters(), chunked_layer.parameters(), strict=True
+    ):
+        if full_parameter.requires_grad:
+            assert full_parameter.grad is not None and chunked_parameter.grad is not None
+            assert torch.allclose(
+                chunked_parameter.grad, full_parameter.grad, atol=3e-6, rtol=3e-6
+            )
+
+
+def test_complex_iter_chunked_validates_input_before_sampling() -> None:
+    layer = MZIComplexConv1d(torch.ones(1, 1, 2, dtype=torch.complex64))
+    with pytest.raises(TypeError, match="complex-valued"):
+        next(layer.iter_chunked(torch.ones(1, 1, 8), 4))
+    with pytest.raises(ValueError, match="at least one sample"):
+        next(layer.iter_chunked(torch.empty(1, 1, 0, dtype=torch.complex64), 4))
+
+
+def test_complex_weight_bank_validates_explicit_phase_perturbation() -> None:
+    bank = MZIComplexWeightBank(torch.ones(1, 1, 2, dtype=torch.complex64))
+    with pytest.raises(TypeError, match="real torch.Tensor"):
+        bank.effective_weights(torch.ones(1, 1, 2, dtype=torch.complex64))
+    with pytest.raises(ValueError, match="match the MZI bank shape"):
+        bank.effective_weights(torch.zeros(1, 2))

@@ -19,7 +19,8 @@
 \newcommand{\pkg}[1]{\texttt{#1}}
 \lstset{basicstyle=\ttfamily\small,backgroundcolor=\color{codebg},frame=single,
 rulecolor=\color{teal!40},breaklines=true,columns=fullflexible,
-xleftmargin=0.5em,xrightmargin=0.5em,aboveskip=0.7em,belowskip=0.7em}
+showstringspaces=false,xleftmargin=0.5em,xrightmargin=0.5em,
+aboveskip=0.7em,belowskip=0.7em}
 \pagestyle{fancy}
 \fancyhf{}
 \lhead{\small OptoSimLab | 可微分光信号级仿真平台}
@@ -29,8 +30,8 @@ xleftmargin=0.5em,xrightmargin=0.5em,aboveskip=0.7em,belowskip=0.7em}
 
 \title{\textcolor{navy}{\Huge OptoSimLab}\\[0.6em]
 \textcolor{teal}{\Large 使用说明与公式自检记录}}
-\author{版本 0.10.1 \quad 可移植安装与使用手册}
-\date{2026-10-26}
+\author{版本 0.10.2 \quad 可移植安装与使用手册}
+\date{2026-10-29}
 
 \begin{document}
 \maketitle
@@ -92,7 +93,7 @@ python -m pytest -q -p no:cacheprovider tests
 \begin{lstlisting}[language=bash]
 # Run in the repository root
 .\.venv\Scripts\Activate.ps1
-python -m pip install --force-reinstall --no-deps .\dist\optosimlab-0.10.1-py3-none-any.whl
+python -m pip install --force-reinstall --no-deps .\dist\optosimlab-0.10.2-py3-none-any.whl
 python -c "from optosimlab import PhotonicRealConvolution; print('import OK')"
 \end{lstlisting}
 
@@ -371,7 +372,7 @@ for y_chunk in conv.iter_chunked(x, chunk_size=65_536):
 optimizer.step()
 conv.project_physical_parameters_()
 \end{lstlisting}
-最后一步将无源 WaveShaper 的衰减投影回非负区间，防止普通优化器一步越过物理边界。自动测试同时验证两支路梯度非零以及权重能从正值训练到负值。
+最后一步将无源 WaveShaper 的衰减投影回非负区间，防止普通优化器一步越过物理边界。自动测试同时验证两支路梯度非零以及权重能从正值训练到负值。复数 MZI 分块路径在同一逻辑记录内复用一次随机相移误差，同时为每一块重新构造参数计算图，因此也支持逐块立即反向传播。
 
 \subsection{MZI 相干复值光学卷积}
 参考 Nature Communications 12, 457 (2021) 的 MZI 复权重网络，\pkg{MZIComplexWeightBank} 对每个输出行先作二范数标定 $s_o$，再将归一化复系数写为
@@ -380,7 +381,7 @@ conv.project_physical_parameters_()
 \exp(\mathrm{j}\phi_{ock}),\qquad
 s_o=\left(\sum_{c,k}|w_{ock}|^2\right)^{1/2}.
 \end{equation}
-$\theta$ 是 MZI 内部相移，$\phi$ 是外部相移。归一化行可嵌入无源酉网络，$s_o$ 是已知读出标定；可选插损以场系数 $10^{-L/20}$ 作用，可选 \pkg{phase\_error\_std\_rad} 在每次前向加入相移误差。优化器更新后的物理投影先将负的 $\cos(\theta/2)$ 等价改写为正幅度和 $\phi+\pi$，再执行
+$\theta$ 是 MZI 内部相移，$\phi$ 是外部相移。每个归一化输出行对应独立分光、独立标定的无源支路，$s_o$ 是已知读出标定；这里不把任意多输出权重组整体声称为一个酉矩阵。可选插损以场系数 $10^{-L/20}$ 作用，可选 \pkg{phase\_error\_std\_rad} 在每次前向加入相移误差。优化器更新后的物理投影先将负的 $\cos(\theta/2)$ 等价改写为正幅度和 $\phi+\pi$，再执行
 \begin{equation}
 \bm a_o\leftarrow\frac{\bm a_o}{\max(1,\lVert\bm a_o\rVert_2)},
 \end{equation}
@@ -393,9 +394,10 @@ y_o[n]=\sum_c\sum_{k=0}^{K-1}w_{ock}x_c[n-kD]+b_o.
 \begin{lstlisting}[language=Python]
 w = torch.tensor([[[0.3+0.2j, -0.1+0.4j]]])
 x = torch.ones(8, 1, 4096, dtype=torch.complex64)
-conv = MZIComplexConv1d(w, tap_delay_samples=1)
-y = conv.forward_chunked(x, chunk_size=512)
-y.abs().square().mean().backward()
+conv = MZIComplexConv1d(
+    w, tap_delay_samples=1, phase_error_std_rad=0.01)
+for y_chunk in conv.iter_chunked(x, chunk_size=512):
+    (y_chunk.abs().square().sum() / x.numel()).backward()
 \end{lstlisting}
 
 \subsection{MNIST 理想、非理想与光学激活实验}
@@ -499,7 +501,7 @@ python -m pip wheel --no-deps --no-build-isolation --wheel-dir dist .
 python -c "from optosimlab import OverlapSaveFIR; print('package OK')"
 \end{lstlisting}
 \begin{tcolorbox}[colback=lightblue,colframe=teal,title=当前验收结果]
-版本 0.10.1 已完成源码编译、专项测试、最终全量测试、示例运行和 wheel 隔离导入。全量结果：\textbf{113 passed, 1 skipped}。无 CUDA 的 CPU 环境中该跳过项是预期行为；在 CUDA 环境中它会自动运行。
+版本 0.10.2 已完成源码编译、专项测试、最终全量测试、示例运行和 wheel 隔离导入。全量结果：\textbf{116 passed, 1 skipped}。无 CUDA 的 CPU 环境中该跳过项是预期行为；在 CUDA 环境中它会自动运行。
 \end{tcolorbox}
 
 \section{当前完成度、限制与后续实验标定}

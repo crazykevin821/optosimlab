@@ -642,14 +642,34 @@ class MZIComplexWeightBank(GraphDevice):
     def kernel_size(self) -> int:
         return self.theta_rad.shape[2]
 
-    def effective_weights(self) -> Tensor:
+    def sample_phase_perturbation(self) -> Tensor:
+        """为一次逻辑前向采样相移误差；分块之间应复用该样本。"""
         dtype = self.theta_rad.dtype
         device = self.theta_rad.device
-        loss = nonnegative_parameter(self.insertion_loss_db, "insertion_loss_db").to(device, dtype)
-        phase_error = nonnegative_parameter(self.phase_error_std_rad, "phase_error_std_rad").to(device, dtype)
-        phase = self.phi_rad
-        if float(phase_error.detach()) > 0.0:
-            phase = phase + torch.randn_like(phase) * phase_error
+        phase_error = nonnegative_parameter(
+            self.phase_error_std_rad, "phase_error_std_rad"
+        ).to(device, dtype)
+        if float(phase_error.detach()) == 0.0:
+            return torch.zeros_like(self.phi_rad)
+        return torch.randn_like(self.phi_rad) * phase_error
+
+    def effective_weights(self, phase_perturbation_rad: Tensor | None = None) -> Tensor:
+        """返回当前复权重，可复用显式相移误差样本完成分块计算。"""
+        dtype = self.theta_rad.dtype
+        device = self.theta_rad.device
+        loss = nonnegative_parameter(
+            self.insertion_loss_db, "insertion_loss_db"
+        ).to(device, dtype)
+        perturbation = (
+            self.sample_phase_perturbation()
+            if phase_perturbation_rad is None
+            else phase_perturbation_rad
+        )
+        if not isinstance(perturbation, Tensor) or torch.is_complex(perturbation):
+            raise TypeError("phase_perturbation_rad must be a real torch.Tensor")
+        if perturbation.shape != self.phi_rad.shape:
+            raise ValueError("phase_perturbation_rad must match the MZI bank shape")
+        phase = self.phi_rad + perturbation.to(device=device, dtype=dtype)
         ten = torch.tensor(10.0, device=device, dtype=dtype)
         field_loss = torch.pow(ten, -loss / 20.0)
         amplitude = self.weight_scale.to(device, dtype) * field_loss * torch.cos(self.theta_rad / 2.0)

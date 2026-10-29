@@ -111,7 +111,7 @@ output = graph(torch.ones(1024, dtype=torch.complex64))
 
 实测曲线在标定电压范围内分段线性插值，范围外钳位到端点；`power_transmission` 必须在 `[0,1]`。2×2 定向耦合器采用交叉端口带 `j` 相位的幺正矩阵。理想、实际、差分双输出和四光端口 MZM 全部集中在 `devices/mzm.py`；双输出和四端口结构由分束器/耦合器与差分相移构成，实际 MZM 在共享理想干涉器上加入插损和有限消光比。
 
-### 1.4 v0.10.1 专项验证
+### 1.4 v0.10.2 专项验证
 
 ```powershell
 # 在仓库根目录执行
@@ -150,7 +150,7 @@ optimizer.step()
 layer.project_physical_parameters_()
 ```
 
-分块路径与整段路径的输出、输入梯度和 WaveShaper 参数梯度均有自动回归测试。优化器更新后应调用 `project_physical_parameters_()`，把无源 WaveShaper 的衰减投影回非负区间。测试还验证两条平衡支路均有非零梯度，且一个正权重能够训练为负权重。
+分块路径与整段路径的输出、输入梯度和器件参数梯度均有自动回归测试。复数 MZI 路径在一次逻辑记录内复用同一份随机相移误差，但为每一块重新构造参数到权重的 autograd 图，因此也可以像上例一样逐块立即反向传播。优化器更新后应调用 `project_physical_parameters_()`，把器件参数投影回物理范围。测试还验证两条平衡支路均有非零梯度，且一个正权重能够训练为负权重。
 
 ### 1.6 MNIST 理想、非理想和强度 MZI 激活实验
 
@@ -182,13 +182,13 @@ from optosimlab import MZIComplexConv1d
 
 w = torch.tensor([[[0.3 + 0.2j, -0.1 + 0.4j]]])  # out=1, in=1, taps=2
 x = torch.ones(8, 1, 4096, dtype=torch.complex64)
-conv = MZIComplexConv1d(w, tap_delay_samples=1)
-y = conv.forward_chunked(x, chunk_size=512)
-loss = y.abs().square().mean()
-loss.backward()  # theta、phi 和输入都有梯度
+conv = MZIComplexConv1d(w, tap_delay_samples=1, phase_error_std_rad=0.01)
+for y_chunk in conv.iter_chunked(x, chunk_size=512):
+    (y_chunk.abs().square().sum() / x.numel()).backward()
+# theta、phi、插损、偏置（若启用）和输入都有梯度
 ```
 
-该层输出的是经过已知行范数标定后的复场；非零 `insertion_loss_db` 保留公共场损耗，`phase_error_std_rad` 可加入逐次前向的相移误差。训练更新后调用 `project_physical_parameters_()`，会把负幅度并入外相移并将每个输出行的归一化幅度二范数限制在 1 以内，维持无源 MZI 网络可实现性。旧 `ComplexConv1d` 仍只作为纯数学兼容层保留。
+该层输出的是经过已知行范数标定后的复场；非零 `insertion_loss_db` 保留公共场损耗，`phase_error_std_rad` 可加入逐次前向的相移误差。训练更新后调用 `project_physical_parameters_()`，会把负幅度并入外相移并将每个输出行的归一化幅度二范数限制在 1 以内。这里每个输出行被解释为独立分光、独立标定的无源支路；任意多输出权重组并未被声称为一个整体幺正矩阵。旧 `ComplexConv1d` 仍只作为纯数学兼容层保留。
 
 ## 2. 每次开始开发时
 

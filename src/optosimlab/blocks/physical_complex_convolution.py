@@ -95,12 +95,25 @@ class MZIComplexConv1d(nn.Module):
         return self._forward_with_weights(field, self.weight_bank.effective_weights())
 
     def iter_chunked(self, field: Tensor, chunk_size: int) -> Iterator[Tensor]:
-        """逐块返回因果复卷积，允许逐块反向传播以限制峰值内存。"""
+        """逐块返回因果复卷积，允许逐块反向传播以限制峰值内存。
+
+        一次迭代复用同一份器件相移误差，但每块重新构造参数到权重的
+        autograd 图，因此各块可以依次调用 ``backward()``。
+        """
         if not isinstance(chunk_size, int) or chunk_size < 1:
             raise ValueError("chunk_size must be a positive integer")
-        effective_weights = self.weight_bank.effective_weights()
+        if not isinstance(field, Tensor) or not torch.is_complex(field):
+            raise TypeError("field must be a complex-valued torch.Tensor")
+        if field.ndim not in (2, 3) or field.shape[-1] < 1:
+            raise ValueError(
+                "field must have shape (in_channels, samples) or "
+                "(batch, in_channels, samples), with at least one sample"
+            )
+        phase_perturbation = self.weight_bank.sample_phase_perturbation()
         if field.shape[-1] <= chunk_size:
-            yield self._forward_with_weights(field, effective_weights)
+            yield self._forward_with_weights(
+                field, self.weight_bank.effective_weights(phase_perturbation)
+            )
             return
         total = field.shape[-1]
         for start in range(0, total, chunk_size):
@@ -110,6 +123,8 @@ class MZIComplexConv1d(nn.Module):
             missing_history = self.maximum_delay - (start - history_start)
             if missing_history:
                 segment = F.pad(segment, (missing_history, 0))
+            # 每块重建参数到权重的 autograd 图，但复用同一次逻辑前向的相移误差。
+            effective_weights = self.weight_bank.effective_weights(phase_perturbation)
             segment_output = self._forward_with_weights(segment, effective_weights)
             yield segment_output[..., - (stop - start) :]
 

@@ -11,7 +11,7 @@ xelatex -interaction=nonstopmode -halt-on-error latex_formula_manual.tex
 xelatex -interaction=nonstopmode -halt-on-error latex_formula_manual.tex
 Copy-Item .\latex_formula_manual.pdf ..\OptoSimLab_使用说明.pdf -Force
 New-Item -ItemType Directory -Force ..\..\output\pdf
-Copy-Item .\latex_formula_manual.pdf ..\..\output\pdf\OptoSimLab_使用说明_v0.10.1.pdf -Force
+Copy-Item .\latex_formula_manual.pdf ..\..\output\pdf\OptoSimLab_使用说明_v0.10.2.pdf -Force
 ~~~
 
 第二次编译用于刷新目录和交叉引用。输出后，用 Poppler 将 PDF 渲染为 PNG，检查中文、公式、代码块、表格、页眉和页码。正式发布同时保留 `docs` 稳定文件名和 `output/pdf` 带版本文件名。

@@ -1,5 +1,12 @@
 # Changelog
 
+## 0.10.2 - 2026-10-29
+
+- Fixed `MZIComplexConv1d.iter_chunked()` so every yielded block builds an independent parameter-to-weight autograd graph and can be backpropagated immediately.
+- Reused one sampled phase-error realization across all blocks of the same logical record, preserving exact chunked/full output and gradient equivalence under stochastic MZI phase error.
+- Added invalid-input checks, randomized multi-shape gradient comparisons, and a 200,000-sample complex-streaming stress validation.
+- Clarified that each normalized MZI weight row is an independently calibrated passive output branch rather than claiming that an arbitrary multi-output bank is one unitary mesh.
+
 ## 0.10.1 - 2026-10-26
 
 - Replaced clipped positive/negative kernel splitting with balanced differential encoding so both physical branches retain useful gradients and trainable weights can cross zero.

@@ -1,6 +1,6 @@
 # OptoSimLab 中文 API 与使用样例
 
-本文对应 v0.10.1。所有公开接口默认采用 SI 单位：光场为 `sqrt(W)`，功率为 W，电压为 V，时间为 s，频率为 Hz，长度为 m，相位为 rad，增益和损耗为功率 dB。
+本文对应 v0.10.2。所有公开接口默认采用 SI 单位：光场为 `sqrt(W)`，功率为 W，电压为 V，时间为 s，频率为 Hz，长度为 m，相位为 rad，增益和损耗为功率 dB。
 
 ## 1. 核心与单位
 
@@ -219,11 +219,11 @@ conv.project_physical_parameters_()
 - `insertion_loss_db`：公共场插损。
 - `phase_error_std_rad`：每次前向的独立高斯相移误差。
 
-训练后调用 `project_physical_parameters_()`：公共插损投影到非负区间；负的 `cos(theta/2)` 等价并入 `phi+pi`；每个输出行的归一化幅度二范数投影到不超过 1，保证无源 MZI 网络可实现。
+训练后调用 `project_physical_parameters_()`：公共插损投影到非负区间；负的 `cos(theta/2)` 等价并入 `phi+pi`；每个输出行的归一化幅度二范数投影到不超过 1。每个输出行对应一条独立分光和读出标定的无源支路；该约束不等价于声明任意多输出权重组本身是一个整体幺正矩阵。
 
 ### `MZIComplexConv1d`
 
-参数：`complex_weights`、`tap_delay_samples`、`bias`、`insertion_loss_db`、`phase_error_std_rad`、`trainable`。输入为复数 `(batch,in_channels,samples)`；输出为同长度因果复卷积。`forward_chunked()` 保持因果历史和 autograd。
+参数：`complex_weights`、`tap_delay_samples`、`bias`、`insertion_loss_db`、`phase_error_std_rad`、`trainable`。输入为复数 `(batch,in_channels,samples)`；输出为同长度因果复卷积。`forward_chunked()` 保持因果历史和 autograd。若要降低训练峰值内存，应遍历 `iter_chunked()` 并对每块立即反向；一次迭代中的所有块复用同一份相移误差样本，但每块拥有独立的参数计算图。
 
 该模型依据 Nature Communications 12, 457 (2021) 中 MZI 内外相移实现复权重、相干探测恢复幅相的路线。它是器件参数化模型，不是波导 FDTD，也没有声称复刻特定芯片版图。
 
